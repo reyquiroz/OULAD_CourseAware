@@ -81,3 +81,4 @@ htmlcov/
 dmypy.json
 
 # Made with Bob
+output_results/
