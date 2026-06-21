@@ -1,0 +1,37 @@
+MIT License
+
+Copyright (c) 2026 OULAD At-Risk Student Prediction Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## OULAD Dataset License
+
+This project uses the Open University Learning Analytics Dataset (OULAD), which is 
+licensed under a Creative Commons Attribution 4.0 International License (CC BY 4.0).
+
+Dataset Citation:
+Kuzilek J., Hlosta M., Zdrahal Z. Open University Learning Analytics dataset 
+Sci. Data 4:170171 doi: 10.1038/sdata.2017.171 (2017).
+
+Dataset available at: https://analyse.kmi.open.ac.uk/open_dataset
+
+When using this code with the OULAD dataset, please cite both this repository 
+and the original OULAD dataset paper.

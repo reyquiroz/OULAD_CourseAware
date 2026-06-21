@@ -1,0 +1,56 @@
+,0
+age_band_55<=,0.9929146985273687
+highest_education_No Formal quals,0.9900666851903307
+highest_education_Post Graduate Qualification,0.9895804390108364
+code_module_AAA,0.974506807446513
+imd_band_Unknown,0.9636704640177827
+region_Ireland,0.9618296749096972
+region_North Region,0.9436301750486246
+region_Yorkshire Region,0.939219227563212
+region_South East Region,0.9351208669074743
+region_Wales,0.9331758821894971
+region_East Midlands Region,0.9290080577938317
+region_South West Region,0.9249096971380939
+code_module_GGG,0.9238330091692136
+region_West Midlands Region,0.9227215893303695
+imd_band_90-100%,0.91914420672409
+imd_band_80-90%,0.9143512086690747
+region_North Western Region,0.9137260350097249
+imd_band_70-80%,0.909697138093915
+imd_band_60-70%,0.9090372325646012
+code_module_EEE,0.9078910808557933
+region_London Region,0.9044873575993332
+region_South Region,0.9039663795498749
+imd_band_0-10%,0.9039316476799111
+disability_Y,0.9036885245901639
+imd_band_50-60%,0.9026465684912476
+imd_band_40-50%,0.9000764101139206
+region_East Anglian Region,0.8977841066963045
+imd_band_10-20,0.8960822450680744
+imd_band_20-30%,0.8908377327035287
+imd_band_30-40%,0.8905251458738539
+region_Scotland,0.8904209502639622
+num_of_prev_attempts,0.876736593498194
+code_module_CCC,0.8625659905529314
+code_presentation_2013B,0.8532925812725757
+highest_education_HE Qualification,0.8509308141150319
+code_module_DDD,0.8017157543762156
+code_module_BBB,0.7741386496248958
+code_presentation_2014B,0.7659419283134203
+code_module_FFF,0.7553487079744373
+code_presentation_2013J,0.7289872186718533
+age_band_35-55,0.7084606835232009
+code_presentation_2014J,0.6517782717421506
+highest_education_Lower Than A Level,0.6070436232286747
+highest_education_A Level or Equivalent,0.5623784384551265
+gender_F,0.5594262295081968
+gender_M,0.4405737704918033
+age_band_0-35,0.2986246179494304
+assess_max,0.284974993053626
+assess_mean,0.284974993053626
+assess_count,0.2815712697971659
+disability_N,0.09631147540983606
+vle_std,0.019310919699916645
+vle_mean,0.0
+studied_credits,0.0
+vle_total,0.0
