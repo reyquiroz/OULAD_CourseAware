@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+oulad_env/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# Data files (OULAD dataset - too large for GitHub)
+# Users should download from: https://analyse.kmi.open.ac.uk/open_dataset
+data/raw/*.csv
+data/raw/*.xlsx
+data/raw/*.xls
+DATA/*.csv
+DATA/*.xlsx
+DATA/*.xls
+
+# Keep processed data and results
+!data/processed/
+!results/
+
+# Keep important result CSVs
+!results/**/*.csv
+!output_results/**/*.csv
+
+# Keep important visualizations (results)
+!results/**/*.png
+!results/**/*.jpg
+!results/**/*.pdf
+
+# Exclude large intermediate outputs
+output_results/*.png
+output_results/*.jpg
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Models (can be large, regenerate from code)
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pth
+
+# Virtual environment
+oulad_env/
+venv/
+env/
+ENV/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Made with Bob
