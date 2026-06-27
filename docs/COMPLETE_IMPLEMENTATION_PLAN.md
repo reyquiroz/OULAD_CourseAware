@@ -559,23 +559,28 @@ def build_oulad_graph(week):
 
 ---
 
-### Phase 3: GNN Implementation (Next)
+### Phase 3: Enrollment-Centric Graph Implementation (Next)
 **Timeline**: Week of June 27, 2026
 
 #### Tasks
-1. [ ] Implement graph construction pipeline
-2. [ ] Create temporal graph snapshots (weeks 2, 4, 6, 8)
-3. [ ] Implement basic HAN model
-4. [ ] Train GNN on OULAD data
-5. [ ] Evaluate GNN vs baseline models
-6. [ ] Analyze learned attention weights
-7. [ ] Document GNN results
+1. [ ] Implement a reusable graph construction pipeline in Python modules and scripts
+2. [ ] Redesign supervision around the student-course-presentation enrollment record
+3. [ ] Build and validate a leakage-safe Week 8 heterogeneous graph first
+4. [ ] Construct the required node types: students, course presentations, assessments, and VLE resources
+5. [ ] Construct the required edge types: enrollment, course-assessment, course-resource, student-assessment submission, and student-resource interaction
+6. [ ] Aggregate repeated student-resource interactions into manageable feature-rich edges
+7. [ ] Implement one initial graph baseline, starting with heterogeneous GraphSAGE or relational GCN
+8. [ ] Evaluate the graph model with baseline-aligned random-student and LCPO splits
+9. [ ] Compare graph performance with LightGBM, including course-level variation
+10. [ ] Extend from Week 8 to Weeks 2, 4, and 6 if the initial pipeline is stable
+11. [ ] Commit graph code, dependencies, graph statistics, result CSVs, and a concise report
 
 #### Deliverables
-- [ ] GNN implementation code
-- [ ] GNN evaluation results
-- [ ] Attention weight analysis
-- [ ] GNN vs baseline comparison report
+- [ ] Reusable graph construction code and scripts
+- [ ] Week 8 validated graph artifacts and statistics
+- [ ] Graph baseline evaluation results for random-student and LCPO settings
+- [ ] Graph vs LightGBM comparison report
+- [ ] Focused execution plan in [`docs/GRAPH_IMPLEMENTATION_EXECUTION_PLAN.md`](docs/GRAPH_IMPLEMENTATION_EXECUTION_PLAN.md)
 
 ---
 

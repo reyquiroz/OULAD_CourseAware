@@ -1,0 +1,81 @@
+====================================================================
+  OULAD Graph Validation Summary — Week 8
+====================================================================
+
+Construction runtime : 30.78 s  |  Peak memory : 1362.5 MB
+
+── Node counts ──────────────────────────────────────────────────
+  student                       28,785
+  course_presentation               22
+  assessment                        40
+  vle_resource                   6,364
+
+── Edge counts ──────────────────────────────────────────────────
+  enrolled_in                   32,593
+  contains_assess                   40
+  has_resource                   6,364
+  submitted                     47,259
+  interacted_with            1,056,217
+  enrollments                   32,593
+
+── Duplicates ───────────────────────────────────────────────────
+  Duplicate nodes (all types) : 0
+  Duplicate edges (all types) : 0
+  Duplicate enrollments       : 0
+
+── Dangling edges ───────────────────────────────────────────────
+  enrolled_in               src=0  dst=0
+  contains_assess           src=0  dst=0
+  has_resource              src=0  dst=0
+  submitted                 src=0  dst=0
+  interacted_with           src=0  dst=0
+  All edge endpoints resolve to known nodes. ✓
+
+── Data quality (null / NaN / Inf) ──────────────────────────────
+  nodes_student                  total=   971 ⚠  [imd_band: null=971 inf=0]
+  nodes_course_presentation      total=     0
+  nodes_assessment               total=     0
+  nodes_vle_resource             total= 10486 ⚠  [week_from: null=5243 inf=0, week_to: null=5243 inf=0]
+  edges_enrolled_in              total=     0
+  edges_contains_assess          total=     0
+  edges_has_resource             total=     0
+  edges_submitted                total=     0
+  edges_interacted_with          total=     0
+  enrollments                    total=     0
+
+── Label distribution ───────────────────────────────────────────
+  Overall : at-risk=17,208  success=15,385  total=32,593  at-risk-rate=52.8%
+  By course presentation:
+    AAA_2013J          at-risk=  105  success=  278  rate=27.4%
+    AAA_2014J          at-risk=  112  success=  253  rate=30.7%
+    BBB_2013B          at-risk=  964  success=  803  rate=54.6%
+    BBB_2013J          at-risk= 1165  success= 1072  rate=52.1%
+    BBB_2014B          at-risk=  886  success=  727  rate=54.9%
+    BBB_2014J          at-risk= 1140  success= 1152  rate=49.7%
+    CCC_2014B          at-risk= 1273  success=  663  rate=65.8%
+    CCC_2014J          at-risk= 1483  success= 1015  rate=59.4%
+    DDD_2013B          at-risk=  793  success=  510  rate=60.9%
+    DDD_2013J          at-risk= 1109  success=  829  rate=57.2%
+    DDD_2014B          at-risk=  749  success=  479  rate=61.0%
+    DDD_2014J          at-risk= 1011  success=  792  rate=56.1%
+    EEE_2013J          at-risk=  443  success=  609  rate=42.1%
+    EEE_2014B          at-risk=  337  success=  357  rate=48.6%
+    EEE_2014J          at-risk=  504  success=  684  rate=42.4%
+    FFF_2013B          at-risk=  832  success=  782  rate=51.5%
+    FFF_2013J          at-risk= 1188  success= 1095  rate=52.0%
+    FFF_2014B          at-risk=  846  success=  654  rate=56.4%
+    FFF_2014J          at-risk= 1248  success= 1117  rate=52.8%
+    GGG_2013J          at-risk=  360  success=  592  rate=37.8%
+    GGG_2014B          at-risk=  355  success=  478  rate=42.6%
+    GGG_2014J          at-risk=  305  success=  444  rate=40.7%
+
+── Temporal-cutoff compliance ───────────────────────────────────
+  Window (days): 56
+  [✓] interacted_with_max_last_day                  value=56 (threshold=56)
+  [✓] interacted_with_max_first_day                 value=56 (threshold=56)
+  [✓] assessment_max_due_date                       value=54 (threshold=56)
+  [✓] interacted_with_min_total_clicks              value=1 (threshold=n/a)
+  [✓] submitted_score_range                         min=0.0 max=100.0
+  Overall temporal compliance: ✓
+
+====================================================================
