@@ -1,0 +1,287 @@
+{
+  "week": 8,
+  "runtime": {
+    "elapsed_seconds": 30.78,
+    "peak_memory_mb": 1362.5
+  },
+  "node_counts": {
+    "student": 28785,
+    "course_presentation": 22,
+    "assessment": 40,
+    "vle_resource": 6364
+  },
+  "edge_counts": {
+    "enrolled_in": 32593,
+    "contains_assess": 40,
+    "has_resource": 6364,
+    "submitted": 47259,
+    "interacted_with": 1056217
+  },
+  "enrollment_count": 32593,
+  "duplicate_nodes": {
+    "student": 0,
+    "course_presentation": 0,
+    "assessment": 0,
+    "vle_resource": 0
+  },
+  "duplicate_edges": {
+    "enrolled_in": 0,
+    "contains_assess": 0,
+    "has_resource": 0,
+    "submitted": 0,
+    "interacted_with": 0
+  },
+  "duplicate_enrollments": 0,
+  "dangling_edges": {
+    "enrolled_in": {
+      "dangling_src": 0,
+      "dangling_dst": 0
+    },
+    "contains_assess": {
+      "dangling_src": 0,
+      "dangling_dst": 0
+    },
+    "has_resource": {
+      "dangling_src": 0,
+      "dangling_dst": 0
+    },
+    "submitted": {
+      "dangling_src": 0,
+      "dangling_dst": 0
+    },
+    "interacted_with": {
+      "dangling_src": 0,
+      "dangling_dst": 0
+    }
+  },
+  "data_quality": {
+    "nodes_student": {
+      "total_null_inf": 971,
+      "by_column": {
+        "imd_band": {
+          "null": 971,
+          "inf": 0
+        }
+      }
+    },
+    "nodes_course_presentation": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "nodes_assessment": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "nodes_vle_resource": {
+      "total_null_inf": 10486,
+      "by_column": {
+        "week_from": {
+          "null": 5243,
+          "inf": 0
+        },
+        "week_to": {
+          "null": 5243,
+          "inf": 0
+        }
+      }
+    },
+    "edges_enrolled_in": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "edges_contains_assess": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "edges_has_resource": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "edges_submitted": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "edges_interacted_with": {
+      "total_null_inf": 0,
+      "by_column": {}
+    },
+    "enrollments": {
+      "total_null_inf": 0,
+      "by_column": {}
+    }
+  },
+  "label_distribution": {
+    "overall": {
+      "at_risk": 17208,
+      "success": 15385,
+      "total": 32593,
+      "at_risk_rate": 0.528
+    },
+    "by_course_presentation": {
+      "AAA_2013J": {
+        "at_risk": 105,
+        "success": 278,
+        "total": 383,
+        "at_risk_rate": 0.2742
+      },
+      "AAA_2014J": {
+        "at_risk": 112,
+        "success": 253,
+        "total": 365,
+        "at_risk_rate": 0.3068
+      },
+      "BBB_2013B": {
+        "at_risk": 964,
+        "success": 803,
+        "total": 1767,
+        "at_risk_rate": 0.5456
+      },
+      "BBB_2013J": {
+        "at_risk": 1165,
+        "success": 1072,
+        "total": 2237,
+        "at_risk_rate": 0.5208
+      },
+      "BBB_2014B": {
+        "at_risk": 886,
+        "success": 727,
+        "total": 1613,
+        "at_risk_rate": 0.5493
+      },
+      "BBB_2014J": {
+        "at_risk": 1140,
+        "success": 1152,
+        "total": 2292,
+        "at_risk_rate": 0.4974
+      },
+      "CCC_2014B": {
+        "at_risk": 1273,
+        "success": 663,
+        "total": 1936,
+        "at_risk_rate": 0.6575
+      },
+      "CCC_2014J": {
+        "at_risk": 1483,
+        "success": 1015,
+        "total": 2498,
+        "at_risk_rate": 0.5937
+      },
+      "DDD_2013B": {
+        "at_risk": 793,
+        "success": 510,
+        "total": 1303,
+        "at_risk_rate": 0.6086
+      },
+      "DDD_2013J": {
+        "at_risk": 1109,
+        "success": 829,
+        "total": 1938,
+        "at_risk_rate": 0.5722
+      },
+      "DDD_2014B": {
+        "at_risk": 749,
+        "success": 479,
+        "total": 1228,
+        "at_risk_rate": 0.6099
+      },
+      "DDD_2014J": {
+        "at_risk": 1011,
+        "success": 792,
+        "total": 1803,
+        "at_risk_rate": 0.5607
+      },
+      "EEE_2013J": {
+        "at_risk": 443,
+        "success": 609,
+        "total": 1052,
+        "at_risk_rate": 0.4211
+      },
+      "EEE_2014B": {
+        "at_risk": 337,
+        "success": 357,
+        "total": 694,
+        "at_risk_rate": 0.4856
+      },
+      "EEE_2014J": {
+        "at_risk": 504,
+        "success": 684,
+        "total": 1188,
+        "at_risk_rate": 0.4242
+      },
+      "FFF_2013B": {
+        "at_risk": 832,
+        "success": 782,
+        "total": 1614,
+        "at_risk_rate": 0.5155
+      },
+      "FFF_2013J": {
+        "at_risk": 1188,
+        "success": 1095,
+        "total": 2283,
+        "at_risk_rate": 0.5204
+      },
+      "FFF_2014B": {
+        "at_risk": 846,
+        "success": 654,
+        "total": 1500,
+        "at_risk_rate": 0.564
+      },
+      "FFF_2014J": {
+        "at_risk": 1248,
+        "success": 1117,
+        "total": 2365,
+        "at_risk_rate": 0.5277
+      },
+      "GGG_2013J": {
+        "at_risk": 360,
+        "success": 592,
+        "total": 952,
+        "at_risk_rate": 0.3782
+      },
+      "GGG_2014B": {
+        "at_risk": 355,
+        "success": 478,
+        "total": 833,
+        "at_risk_rate": 0.4262
+      },
+      "GGG_2014J": {
+        "at_risk": 305,
+        "success": 444,
+        "total": 749,
+        "at_risk_rate": 0.4072
+      }
+    }
+  },
+  "temporal_compliance": {
+    "window_days": 56,
+    "checks": {
+      "interacted_with_max_last_day": {
+        "value": 56,
+        "threshold": 56,
+        "compliant": true
+      },
+      "interacted_with_max_first_day": {
+        "value": 56,
+        "threshold": 56,
+        "compliant": true
+      },
+      "assessment_max_due_date": {
+        "value": 54,
+        "threshold": 56,
+        "compliant": true
+      },
+      "interacted_with_min_total_clicks": {
+        "value": 1,
+        "compliant": true,
+        "note": "Every aggregated interaction record must have >=1 click."
+      },
+      "submitted_score_range": {
+        "min": 0.0,
+        "max": 100.0,
+        "compliant": true,
+        "note": "Null scores are filled to 0 by the pipeline."
+      }
+    },
+    "all_compliant": true
+  }
+}

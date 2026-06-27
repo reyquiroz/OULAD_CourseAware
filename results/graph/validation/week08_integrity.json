@@ -1,0 +1,40 @@
+{
+  "week": 8,
+  "elapsed_seconds": 30.78,
+  "peak_memory_mb": 1362.5,
+  "integrity": {
+    "dup_nodes_student": 0,
+    "dup_nodes_course_presentation": 0,
+    "dup_nodes_assessment": 0,
+    "dup_nodes_vle_resource": 0,
+    "dup_edges_enrolled_in": 0,
+    "dup_edges_contains_assess": 0,
+    "dup_edges_has_resource": 0,
+    "dup_edges_submitted": 0,
+    "dup_edges_interacted_with": 0,
+    "dangling_enrolled_in_src": 0,
+    "dangling_enrolled_in_dst": 0,
+    "dup_enrollments": 0,
+    "null_values_student": 971,
+    "null_values_course_presentation": 0,
+    "null_values_assessment": 0,
+    "null_values_vle_resource": 10486,
+    "label_at_risk": 17208,
+    "label_success": 15385,
+    "label_at_risk_rate": 0.528
+  },
+  "node_counts": {
+    "student": 28785,
+    "course_presentation": 22,
+    "assessment": 40,
+    "vle_resource": 6364
+  },
+  "edge_counts": {
+    "enrolled_in": 32593,
+    "contains_assess": 40,
+    "has_resource": 6364,
+    "submitted": 47259,
+    "interacted_with": 1056217
+  },
+  "enrollment_count": 32593
+}

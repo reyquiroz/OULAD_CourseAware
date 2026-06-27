@@ -20,12 +20,22 @@ BASELINE_RESULTS_DIR = RESULTS_DIR / "baseline"
 LCPO_RESULTS_DIR = RESULTS_DIR / "lcpo"
 CROSS_COURSE_RESULTS_DIR = RESULTS_DIR / "cross_course"
 
+# Graph pipeline subdirectories
+GRAPH_RESULTS_DIR = RESULTS_DIR / "graph"
+GRAPH_ARTIFACTS_DIR = GRAPH_RESULTS_DIR / "artifacts"
+GRAPH_VALIDATION_DIR = GRAPH_RESULTS_DIR / "validation"
+GRAPH_EVALUATION_DIR = GRAPH_RESULTS_DIR / "evaluation"
+
 # Create directories if they don't exist
 for directory in [
     RESULTS_DIR,
     BASELINE_RESULTS_DIR,
     LCPO_RESULTS_DIR,
     CROSS_COURSE_RESULTS_DIR,
+    GRAPH_RESULTS_DIR,
+    GRAPH_ARTIFACTS_DIR,
+    GRAPH_VALIDATION_DIR,
+    GRAPH_EVALUATION_DIR,
     MODELS_DIR,
     DOCS_DIR,
 ]:
@@ -40,9 +50,12 @@ COURSES_FILE = DATA_DIR / "courses.csv"
 VLE_FILE = DATA_DIR / "vle.csv"
 STUDENT_REGISTRATION_FILE = DATA_DIR / "studentRegistration.csv"
 
+# Random state for reproducibility
+RANDOM_STATE = 42
+
 # Model hyperparameters
 MODEL_PARAMS = {
-    "random_state": 42,
+    "random_state": RANDOM_STATE,
     "cv_folds": 5,
     "test_size": 0.2,
     # Model-specific parameters
