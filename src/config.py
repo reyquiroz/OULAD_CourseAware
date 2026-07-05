@@ -10,7 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 
 # Data directories
-DATA_DIR = PROJECT_ROOT / "DATA/raw"
+DATA_DIR = PROJECT_ROOT / "data/raw"
 RESULTS_DIR = PROJECT_ROOT / "results"
 MODELS_DIR = PROJECT_ROOT / "models"
 DOCS_DIR = PROJECT_ROOT / "docs"

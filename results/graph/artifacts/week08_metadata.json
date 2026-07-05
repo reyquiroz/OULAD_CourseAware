@@ -91,17 +91,17 @@
   "label_success_count": 15385,
   "label_at_risk_rate": 0.528,
   "artifacts": {
-    "nodes_student": "week08_nodes_student.csv",
-    "nodes_course_presentation": "week08_nodes_course_presentation.csv",
-    "nodes_assessment": "week08_nodes_assessment.csv",
-    "nodes_vle_resource": "week08_nodes_vle_resource.csv",
-    "edges_enrolled_in": "week08_edges_enrolled_in.csv",
-    "edges_contains_assess": "week08_edges_contains_assess.csv",
-    "edges_has_resource": "week08_edges_has_resource.csv",
-    "edges_submitted": "week08_edges_submitted.csv",
-    "edges_interacted_with": "week08_edges_interacted_with.csv",
-    "enrollments": "week08_enrollments.csv"
+    "nodes_student": "week08_nodes_student.parquet",
+    "nodes_course_presentation": "week08_nodes_course_presentation.parquet",
+    "nodes_assessment": "week08_nodes_assessment.parquet",
+    "nodes_vle_resource": "week08_nodes_vle_resource.parquet",
+    "edges_enrolled_in": "week08_edges_enrolled_in.parquet",
+    "edges_contains_assess": "week08_edges_contains_assess.parquet",
+    "edges_has_resource": "week08_edges_has_resource.parquet",
+    "edges_submitted": "week08_edges_submitted.parquet",
+    "edges_interacted_with": "week08_edges_interacted_with.parquet",
+    "enrollments": "week08_enrollments.parquet"
   },
-  "elapsed_seconds": 30.78,
-  "peak_memory_mb": 1362.5
+  "elapsed_seconds": 6.56,
+  "peak_memory_mb": 1048.7
 }

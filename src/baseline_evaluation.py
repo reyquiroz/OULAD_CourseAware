@@ -1,187 +1,117 @@
 """
-OULAD Baseline Analysis - Enhanced Version
-Complete implementation with all required improvements
+OULAD Baseline Analysis
 
-Label Convention (CORRECTED):
+Label Convention:
 - 1 = at-risk (Fail/Withdrawn) - positive class for intervention
 - 0 = success (Pass/Distinction) - negative class
+
+Key design decisions (tasks 1-5):
+  Task 1: assessment filtering uses due_date (assessments.date) <= window, not
+          date_submitted — submission date leaks future behaviour
+  Task 2: build_features starts from all enrollments so inactive students are
+          retained with zero-valued activity features
+  Task 3: random CV uses GroupKFold on id_student so the same student cannot
+          appear in both train and test within a fold
+  Task 4: fold assignments (id_student, fold) are saved to a CSV alongside results
+  Task 5: Demographics-only added as a feature subset alongside existing conditions
 """
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-from sklearn.model_selection import (
-    train_test_split,
-    StratifiedKFold,
-    cross_val_score,
-    cross_validate,
-)
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import (
-    roc_auc_score,
-    average_precision_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    balanced_accuracy_score,
-    make_scorer,
-)
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.dummy import DummyClassifier
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
 import warnings
 
-# Import configuration
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    average_precision_score,
+    balanced_accuracy_score,
+    f1_score,
+    make_scorer,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import (
+    GroupKFold,
+    StratifiedKFold,
+    cross_validate,
+)
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+
 from config import (
-    DATA_DIR,
     BASELINE_RESULTS_DIR,
-    MODEL_PARAMS,
     PREDICTION_WINDOWS,
-    LABEL_MAPPING,
-    METRICS,
-    MODELS,
+    RANDOM_STATE,
+)
+from oulad_data import (
+    build_features,
+    create_datasets,
+    evaluate_metrics,
+    filter_window,
+    load_oulad_data,
+    sanitize_feature_names,
 )
 
 warnings.filterwarnings("ignore")
 
-# ============================================================================
-# 1. DATA LOADING
-# ============================================================================
-
-
-def load_oulad_data(data_dir=None):
-    """
-    Load OULAD datasets
-
-    Args:
-        data_dir: Path to data directory (uses config.DATA_DIR if None)
-
-    Returns:
-        Tuple of (student_info, student_vle, student_assess, assessments)
-    """
-    if data_dir is None:
-        data_dir = DATA_DIR
-    else:
-        data_dir = Path(data_dir)
-
-    print("Loading OULAD data...")
-    student_info = pd.read_csv(data_dir / "studentInfo.csv")
-    student_vle = pd.read_csv(data_dir / "studentVle.csv")
-    student_assess = pd.read_csv(data_dir / "studentAssessment.csv")
-    assessments = pd.read_csv(data_dir / "assessments.csv")
-
-    # Define risk label (CORRECTED):
-    # 1 = at-risk (Fail/Withdrawn) - students who need intervention
-    # 0 = success (Pass/Distinction) - students on track
-    student_info["target"] = student_info["final_result"].apply(
-        lambda x: 1 if x in ["Fail", "Withdrawn"] else 0
-    )
-
-    print(f"Loaded {len(student_info)} students")
-    print(f"Target distribution:")
-    print(f"  At-risk (1): {(student_info['target'] == 1).sum()} students")
-    print(f"  Success (0): {(student_info['target'] == 0).sum()} students")
-
-    return student_info, student_vle, student_assess, assessments
-
 
 # ============================================================================
-# 2. FEATURE ENGINEERING
-# ============================================================================
-
-
-def filter_window(vle, assess, assessments, window):
-    """Filter data up to specified day (leakage-safe)"""
-    vle_w = vle[vle["date"] <= window]
-    assess = assess.merge(
-        assessments[["id_assessment", "code_module", "code_presentation", "date"]],
-        on="id_assessment",
-        how="left",
-    )
-    assess_w = assess[assess["date"] <= window]
-    return vle_w, assess_w
-
-
-def build_features(vle_w, assess_w, student_info):
-    """Build feature set from VLE and assessment data"""
-    # VLE features
-    vle = vle_w.groupby(["id_student", "code_module", "code_presentation"]).agg(
-        {"sum_click": ["sum", "mean", "std"]}
-    )
-    vle.columns = ["vle_total", "vle_mean", "vle_std"]
-    vle = vle.reset_index()
-
-    # Assessment features
-    assess = assess_w.groupby(["id_student", "code_module", "code_presentation"]).agg(
-        {"score": ["mean", "max"], "date": "count"}
-    )
-    assess.columns = ["assess_mean", "assess_max", "assess_count"]
-    assess = assess.reset_index()
-
-    # Merge all
-    df = vle.merge(
-        assess, how="left", on=["id_student", "code_module", "code_presentation"]
-    )
-    df = df.merge(
-        student_info, on=["id_student", "code_module", "code_presentation"], how="left"
-    )
-
-    # Handle missing values by type
-    num_cols = df.select_dtypes(include=[np.number]).columns
-    cat_cols = df.columns.difference(num_cols)
-
-    df[num_cols] = df[num_cols].fillna(0)
-    df[cat_cols] = df[cat_cols].fillna("Unknown")
-
-    return df
-
-
-def create_datasets(
-    student_info, student_vle, student_assess, assessments, weeks=[2, 4, 6, 8]
-):
-    """Create datasets for multiple prediction windows"""
-    datasets = {}
-    for w in weeks:
-        print(f"Building features for week {w}...")
-        vle_w, assess_w = filter_window(student_vle, student_assess, assessments, w * 7)
-        df = build_features(vle_w, assess_w, student_info)
-        datasets[w] = df
-        print(f"  Week {w}: {df.shape[0]} samples, {df.shape[1]} features")
-    return datasets
-
-
-# ============================================================================
-# 3. EVALUATION FRAMEWORK
+# 1. EVALUATION FRAMEWORK
 # ============================================================================
 
 
 def get_all_metrics():
-    """Define all evaluation metrics"""
+    """Define all evaluation metrics (positive class = 1 = at-risk)."""
     return {
         "AUROC": "roc_auc",
         "AUPRC": "average_precision",
-        "F1": make_scorer(f1_score),
+        "F1": make_scorer(f1_score, zero_division=0),
         "Precision": make_scorer(precision_score, zero_division=0),
         "Recall": make_scorer(recall_score, zero_division=0),
         "Balanced_Acc": make_scorer(balanced_accuracy_score),
     }
 
 
-def evaluate_model_cv(model, X, y, cv=5):
-    """Evaluate model with cross-validation"""
+def evaluate_model_student_grouped_cv(model, X, y, student_ids, n_folds=5, random_state=RANDOM_STATE):
+    """
+    Evaluate model with student-grouped k-fold cross-validation.
+
+    Uses GroupKFold on id_student so the same student cannot appear in
+    both training and test within a fold (task 3).
+
+    Returns:
+        results: dict of metric -> {mean, std, scores}
+        fold_assignments: DataFrame with (id_student, fold) columns (task 4)
+    """
+    from sklearn.preprocessing import LabelEncoder
+
+    # Map students to integer group labels for GroupKFold
+    student_arr = np.array(student_ids)
+    unique_students = np.unique(student_arr)
+    n_students = len(unique_students)
+
+    # Shuffle students with fixed seed, then assign fold labels
+    rng = np.random.default_rng(random_state)
+    shuffled = rng.permutation(unique_students)
+    fold_label = {sid: i % n_folds for i, sid in enumerate(shuffled)}
+    groups = np.array([fold_label[sid] for sid in student_arr])
+
+    fold_assignment_rows = [
+        {"id_student": sid, "fold": fold_label[sid]} for sid in unique_students
+    ]
+    fold_assignments = pd.DataFrame(fold_assignment_rows)
+
     scoring = get_all_metrics()
+    gkf = GroupKFold(n_splits=n_folds)
     cv_results = cross_validate(
         model,
         X,
         y,
-        cv=StratifiedKFold(n_splits=cv, shuffle=True, random_state=42),
+        cv=gkf.split(X, y, groups=groups),
         scoring=scoring,
         return_train_score=False,
     )
@@ -190,7 +120,8 @@ def evaluate_model_cv(model, X, y, cv=5):
     for metric in scoring.keys():
         scores = cv_results[f"test_{metric}"]
         results[metric] = {"mean": scores.mean(), "std": scores.std(), "scores": scores}
-    return results
+
+    return results, fold_assignments
 
 
 # ============================================================================

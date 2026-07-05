@@ -1,7 +1,7 @@
 {
   "week": 8,
-  "elapsed_seconds": 30.78,
-  "peak_memory_mb": 1362.5,
+  "elapsed_seconds": 6.56,
+  "peak_memory_mb": 1048.7,
   "integrity": {
     "dup_nodes_student": 0,
     "dup_nodes_course_presentation": 0,
@@ -15,10 +15,10 @@
     "dangling_enrolled_in_src": 0,
     "dangling_enrolled_in_dst": 0,
     "dup_enrollments": 0,
-    "null_values_student": 971,
+    "null_values_student": 0,
     "null_values_course_presentation": 0,
     "null_values_assessment": 0,
-    "null_values_vle_resource": 10486,
+    "null_values_vle_resource": 0,
     "label_at_risk": 17208,
     "label_success": 15385,
     "label_at_risk_rate": 0.528

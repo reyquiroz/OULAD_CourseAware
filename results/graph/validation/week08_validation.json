@@ -1,8 +1,8 @@
 {
   "week": 8,
   "runtime": {
-    "elapsed_seconds": 30.78,
-    "peak_memory_mb": 1362.5
+    "elapsed_seconds": 6.56,
+    "peak_memory_mb": 1048.7
   },
   "node_counts": {
     "student": 28785,

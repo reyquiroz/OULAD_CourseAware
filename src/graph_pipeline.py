@@ -183,6 +183,30 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     v["node_idx"] = v.index
     nodes["vle_resource"] = v
 
+    # ------------------------------------------------------------------
+    # Explicit null imputation — must happen before tensors are built.
+    # Strategy mirrors oulad_data.build_features(): numeric → 0,
+    # categorical → "Unknown".  node_idx is excluded (always integer).
+    # Pre-imputation null counts are printed for audit transparency.
+    # ------------------------------------------------------------------
+    for ntype, ndf in nodes.items():
+        feat_cols = [c for c in ndf.columns if c != "node_idx"]
+        pre_nulls = ndf[feat_cols].isnull().sum()
+        pre_total = int(pre_nulls.sum())
+        if pre_total > 0:
+            print(
+                f"  [impute] {ntype}: {pre_total} null(s) before imputation — "
+                + ", ".join(f"{c}={n}" for c, n in pre_nulls.items() if n > 0)
+            )
+        num_cols = ndf[feat_cols].select_dtypes(include=[np.number]).columns
+        cat_cols = pd.Index([c for c in feat_cols if c not in num_cols])
+        ndf[num_cols] = ndf[num_cols].fillna(0)
+        ndf[cat_cols] = ndf[cat_cols].fillna("Unknown")
+        post_nulls = int(ndf[feat_cols].isnull().sum().sum())
+        assert post_nulls == 0, (
+            f"Unexpected nulls in {ntype} after imputation: {post_nulls}"
+        )
+
     return nodes
 
 

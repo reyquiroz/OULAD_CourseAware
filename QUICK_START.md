@@ -1,8 +1,47 @@
 # OULAD Analysis - Quick Start Guide
 
-**Last Updated**: June 20, 2026
+**Last Updated**: June 2026
 
 This guide provides the exact commands to run all analysis scripts in the correct order.
+
+---
+
+## Reproducibility: Fresh Clone Setup
+
+To reproduce all results from a clean clone:
+
+```bash
+# 1. Clone and enter the project
+git clone <repo-url>
+cd OULAD
+
+# 2. Set Python version via pyenv (Python 3.11.11, PyTorch-compatible)
+pyenv install 3.11.11   # skip if already installed
+# .python-version file already pins the version — no extra command needed
+
+# 3. Create virtual environment and install base dependencies
+python -m venv oulad_env
+source oulad_env/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Install PyTorch and PyTorch Geometric (CPU)
+pip install torch torch-geometric --index-url https://download.pytorch.org/whl/cpu
+# For CUDA 12.1 replace the URL with: https://download.pytorch.org/whl/cu121
+
+# 5. Place OULAD CSV data files in data/raw/
+#    Download from: https://analyse.kmi.open.ac.uk/open_dataset
+ls data/raw/*.csv   # should list 7 CSV files
+
+# 6. Build the Week 8 graph and run validation
+python src/run_graph_pipeline.py --week 8
+
+# 7. Open the canonical graph analysis notebook
+jupyter lab notebooks/OULAD_Graph_Analysis_Final.ipynb
+```
+
+Validation report: `results/graph/validation/week08_validation_summary.txt`
+Full validation details: `docs/validation_report_week8.md`
 
 ---
 
@@ -10,7 +49,7 @@ This guide provides the exact commands to run all analysis scripts in the correc
 
 ### 1. Activate Virtual Environment
 ```bash
-cd /Users/olivialoza/Documents/Development/OULAD
+cd /path/to/OULAD
 source oulad_env/bin/activate
 ```
 
@@ -137,26 +176,25 @@ python threshold_optimization.py
 
 ---
 
-### Step 7: GNN Training (2-3 hours)
+### Step 7: Build Week 8 Graph (< 10 minutes)
 
-**First, install PyTorch and PyTorch Geometric**:
 ```bash
-# For CPU-only (faster to install)
-pip install torch torchvision torchaudio
-
-# Install PyTorch Geometric
-pip install torch-geometric
+# From project root
+python src/run_graph_pipeline.py --week 8
 ```
 
-**Then run**:
-```bash
-cd src
-python gnn_model.py
-```
+**What it does**: Runs all 7 pipeline stages (load → filter → nodes → edges → enrollments → validate → persist).
+Assessment filtering uses **due date ≤ 56 days**, not submission date.
 
 **Outputs**:
-- `results/gnn/best_model.pt`
-- Console output with training progress
+- `results/graph/artifacts/week08_*.parquet` (10 files, gitignored — regenerate locally)
+- `results/graph/artifacts/week08_metadata.json`
+- `results/graph/validation/week08_validation_summary.txt`
+- `results/graph/validation/week08_integrity.json`
+
+**Validation report**: `docs/validation_report_week8.md`
+
+> GNN training (GraphSAGE) is planned for the following iteration.
 
 ---
 

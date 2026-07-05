@@ -1,49 +1,25 @@
 """
-OULAD shared data utilities
-Centralizes raw-data loading, leakage-safe temporal filtering, feature-name
-sanitization, and metric calculation so that both the tabular baseline
-(baseline_evaluation.py / lcpo_evaluation.py) and the graph pipeline
-(graph_pipeline.py) can import from a single authoritative source instead
-of duplicating these functions.
-
-Label convention (consistent with existing baselines):
-  1 = at-risk  (Fail / Withdrawn)   — positive class, intervention target
-  0 = success  (Pass / Distinction) — negative class
+Shared OULAD data utilities for baseline and graph pipelines.
 """
 
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 from sklearn.metrics import (
-    roc_auc_score,
     average_precision_score,
+    balanced_accuracy_score,
     f1_score,
     precision_score,
     recall_score,
-    balanced_accuracy_score,
+    roc_auc_score,
 )
 
 from config import DATA_DIR
 
 
-# ---------------------------------------------------------------------------
-# Raw-table loading
-# ---------------------------------------------------------------------------
-
 def load_oulad_data(data_dir=None):
-    """
-    Load core OULAD tables and attach binary risk label to studentInfo.
-
-    Args:
-        data_dir: Path to the raw-data directory.  Defaults to config.DATA_DIR.
-
-    Returns:
-        Tuple: (student_info, student_vle, student_assess, assessments)
-            student_info  – studentInfo.csv with 'target' column added
-            student_vle   – studentVle.csv
-            student_assess – studentAssessment.csv
-            assessments   – assessments.csv
-    """
+    """Load core OULAD tables and attach binary risk label to student info."""
     if data_dir is None:
         data_dir = DATA_DIR
     else:
@@ -54,7 +30,6 @@ def load_oulad_data(data_dir=None):
     student_assess = pd.read_csv(data_dir / "studentAssessment.csv")
     assessments = pd.read_csv(data_dir / "assessments.csv")
 
-    # Binary label: 1 = at-risk (Fail/Withdrawn), 0 = success (Pass/Distinction)
     student_info["target"] = student_info["final_result"].apply(
         lambda x: 1 if x in ["Fail", "Withdrawn"] else 0
     )
@@ -63,16 +38,7 @@ def load_oulad_data(data_dir=None):
 
 
 def load_supplementary_tables(data_dir=None):
-    """
-    Load VLE metadata, courses, and registration tables used by the graph
-    pipeline but not required for the tabular baseline.
-
-    Args:
-        data_dir: Path to the raw-data directory.  Defaults to config.DATA_DIR.
-
-    Returns:
-        Tuple: (vle, courses, student_registration)
-    """
+    """Load tables used outside the baseline feature pipeline."""
     if data_dir is None:
         data_dir = DATA_DIR
     else:
@@ -85,61 +51,61 @@ def load_supplementary_tables(data_dir=None):
     return vle, courses, student_registration
 
 
-# ---------------------------------------------------------------------------
-# Leakage-safe temporal filtering
-# ---------------------------------------------------------------------------
-
 def filter_window(vle, assess, assessments, window):
-    """
-    Filter VLE interactions and assessment submissions to those available by
-    *window* days from the start of the course presentation.
+    """Filter VLE and assessment submissions to records available by *window*.
 
-    Assessment availability is determined by assessment **due date** (not
-    submission date), matching the baseline rule documented in
-    docs/LEAKAGE_PREVENTION.md.
-
-    Args:
-        vle:         studentVle DataFrame (must have 'date' column).
-        assess:      studentAssessment DataFrame (must have 'id_assessment').
-        assessments: assessments metadata DataFrame (must have 'id_assessment',
-                     'code_module', 'code_presentation', 'date').
-        window:      Maximum day (inclusive) to retain.
-
-    Returns:
-        Tuple: (vle_w, assess_w)  — filtered copies; assess_w has due-date
-               columns merged in.
+    Assessments are included only if their due date (assessments.date) falls on
+    or before *window*.  Using the submission date would leak future behaviour
+    (a student could submit after the prediction cutoff).
     """
     vle_w = vle[vle["date"] <= window].copy()
 
-    assess_with_due = assess.merge(
+    assess_with_dates = assess.merge(
         assessments[["id_assessment", "code_module", "code_presentation", "date"]],
         on="id_assessment",
         how="left",
     )
-    assess_w = assess_with_due[assess_with_due["date"] <= window].copy()
+    assess_w = assess_with_dates[assess_with_dates["date"] <= window].copy()
 
     return vle_w, assess_w
 
 
-# ---------------------------------------------------------------------------
-# Feature-name sanitization
-# ---------------------------------------------------------------------------
+def build_features(vle_w, assess_w, student_info):
+    """Build one row per student-course enrollment, retaining inactive students."""
+    enrollments = student_info.copy()
+
+    vle = vle_w.groupby(["id_student", "code_module", "code_presentation"]).agg(
+        {"sum_click": ["sum", "mean", "std"]}
+    )
+    vle.columns = ["vle_total", "vle_mean", "vle_std"]
+    vle = vle.reset_index()
+
+    assess = assess_w.groupby(["id_student", "code_module", "code_presentation"]).agg(
+        {"score": ["mean", "max"], "id_assessment": "count"}
+    )
+    assess.columns = ["assess_mean", "assess_max", "assess_count"]
+    assess = assess.reset_index()
+
+    df = enrollments.merge(
+        vle, how="left", on=["id_student", "code_module", "code_presentation"]
+    )
+    df = df.merge(
+        assess, how="left", on=["id_student", "code_module", "code_presentation"]
+    )
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    cat_cols = df.columns.difference(num_cols)
+
+    df[num_cols] = df[num_cols].fillna(0)
+    df[cat_cols] = df[cat_cols].fillna("Unknown")
+
+    return df
+
 
 def sanitize_feature_names(df):
-    """
-    Replace characters in column names that are illegal for XGBoost / LightGBM
-    (square brackets, angle brackets).
-
-    Args:
-        df: DataFrame whose column names need sanitizing (mutated in place and
-            returned for convenience).
-
-    Returns:
-        The same DataFrame with sanitized column names.
-    """
+    """Sanitize column names for XGBoost compatibility."""
     df.columns = (
-        df.columns
-        .str.replace("[", "_", regex=False)
+        df.columns.str.replace("[", "_", regex=False)
         .str.replace("]", "_", regex=False)
         .str.replace("<", "_lt_", regex=False)
         .str.replace(">", "_gt_", regex=False)
@@ -147,25 +113,8 @@ def sanitize_feature_names(df):
     return df
 
 
-# ---------------------------------------------------------------------------
-# Metric calculation
-# ---------------------------------------------------------------------------
-
 def evaluate_metrics(y_true, y_pred, y_proba):
-    """
-    Compute the six canonical evaluation metrics used by both the tabular
-    baseline and the graph evaluation pipeline.
-
-    Metrics: AUROC, AUPRC, F1, Precision, Recall, Balanced_Acc
-
-    Args:
-        y_true:  Ground-truth binary labels (0 / 1 array-like).
-        y_pred:  Hard binary predictions (0 / 1 array-like).
-        y_proba: Predicted probabilities for the positive class.
-
-    Returns:
-        dict mapping metric name → float value.
-    """
+    """Compute the standard binary-classification metrics."""
     return {
         "AUROC": roc_auc_score(y_true, y_proba),
         "AUPRC": average_precision_score(y_true, y_proba),
@@ -174,3 +123,113 @@ def evaluate_metrics(y_true, y_pred, y_proba):
         "Recall": recall_score(y_true, y_pred, zero_division=0),
         "Balanced_Acc": balanced_accuracy_score(y_true, y_pred),
     }
+
+
+def create_datasets(student_info, student_vle, student_assess, assessments, weeks=(2, 4, 6, 8)):
+    """Create per-week feature tables."""
+    datasets = {}
+    for week in weeks:
+        vle_w, assess_w = filter_window(student_vle, student_assess, assessments, week * 7)
+        datasets[week] = build_features(vle_w, assess_w, student_info)
+    return datasets
+
+
+# ---------------------------------------------------------------------------
+# Evaluation split utilities
+# ---------------------------------------------------------------------------
+
+def random_student_split(enrollments_df, val_frac=0.1, test_frac=0.2, seed=42):
+    """Return boolean train/val/test masks split on unique *students*.
+
+    The same student will not appear in more than one partition.  Splits are
+    applied at the student level then broadcast to all enrollment rows for
+    that student.
+
+    Args:
+        enrollments_df: DataFrame with an ``id_student`` column (one row per
+                        enrollment, as produced by build_enrollment_supervision).
+        val_frac:        Fraction of unique students assigned to validation.
+        test_frac:       Fraction of unique students assigned to test.
+        seed:            Random seed for reproducibility.
+
+    Returns:
+        Tuple of three boolean Series (train_mask, val_mask, test_mask)
+        aligned to enrollments_df.index.
+
+    Raises:
+        ValueError: if any resulting split would be empty.
+    """
+    rng = np.random.default_rng(seed)
+    unique_students = np.array(enrollments_df["id_student"].unique())
+    rng.shuffle(unique_students)
+
+    n = len(unique_students)
+    n_test = max(1, int(np.floor(n * test_frac)))
+    n_val = max(1, int(np.floor(n * val_frac)))
+    n_train = n - n_val - n_test
+
+    if n_train < 1:
+        raise ValueError(
+            f"random_student_split: not enough unique students ({n}) to form "
+            f"non-empty train/val/test with val_frac={val_frac}, "
+            f"test_frac={test_frac}."
+        )
+
+    test_students = set(unique_students[:n_test])
+    val_students = set(unique_students[n_test: n_test + n_val])
+    # remaining → train (implicit; verified below by assertion)
+
+    test_mask = enrollments_df["id_student"].isin(test_students)
+    val_mask = enrollments_df["id_student"].isin(val_students)
+    train_mask = ~test_mask & ~val_mask
+
+    assert train_mask.sum() > 0, "random_student_split: train set is empty"
+    assert val_mask.sum() > 0, "random_student_split: val set is empty"
+    assert test_mask.sum() > 0, "random_student_split: test set is empty"
+    # Verify no student overlap between train and test
+    train_students = set(enrollments_df.loc[train_mask, "id_student"].unique())
+    assert train_students.isdisjoint(test_students), (
+        "random_student_split: student overlap detected between train and test"
+    )
+
+    return train_mask, val_mask, test_mask
+
+
+def lcpo_split(enrollments_df, held_out_module, held_out_presentation):
+    """Return boolean train/test masks for Leave-Course-Presentation-Out.
+
+    The test set is all enrollments where ``code_module == held_out_module``
+    **and** ``code_presentation == held_out_presentation``.  The train set is
+    the complement.
+
+    Args:
+        enrollments_df:       DataFrame with ``id_student``, ``code_module``,
+                              and ``code_presentation`` columns.
+        held_out_module:      Module code to hold out (e.g. ``"BBB"``).
+        held_out_presentation: Presentation code to hold out (e.g. ``"2013J"``).
+
+    Returns:
+        Tuple of two boolean Series (train_mask, test_mask) aligned to
+        enrollments_df.index.
+
+    Raises:
+        ValueError: if either resulting split would be empty.
+    """
+    test_mask = (
+        (enrollments_df["code_module"] == held_out_module)
+        & (enrollments_df["code_presentation"] == held_out_presentation)
+    )
+    train_mask = ~test_mask
+
+    if test_mask.sum() == 0:
+        raise ValueError(
+            f"lcpo_split: no enrollments found for "
+            f"{held_out_module}/{held_out_presentation}."
+        )
+    if train_mask.sum() == 0:
+        raise ValueError(
+            f"lcpo_split: train set is empty — only one course-presentation "
+            f"exists in enrollments_df."
+        )
+
+    return train_mask, test_mask

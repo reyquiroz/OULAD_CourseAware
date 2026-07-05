@@ -82,3 +82,10 @@ dmypy.json
 
 # Made with Bob
 output_results/
+
+# Graph pipeline — large binary artifacts (regenerate with run_graph_pipeline.py)
+results/graph/artifacts/*.parquet
+results/graph/artifacts/*.csv
+# Keep metadata JSON and validation text reports (small, human-readable)
+!results/graph/artifacts/*_metadata.json
+!results/graph/validation/
