@@ -18,21 +18,14 @@ venv/
 env/
 ENV/
 
-# ── Raw OULAD data (download from https://analyse.kmi.open.ac.uk/open_dataset)
-# Covers all directory casings that have appeared in this repo
-data/raw/*.csv
-data/raw/*.xlsx
-data/raw/*.xls
-data/raw/*.zip
-data/*.csv
-data/*.xlsx
-data/*.xls
-Data/*.csv
-Data/*.xlsx
-Data/*.xls
-DATA/*.csv
-DATA/*.xlsx
-DATA/*.xls
+# ── Raw OULAD data — studentVle.csv is 433 MB, hard-blocked by GitHub ─────
+# All other CSVs are tracked (≤ 6 MB each).
+# Download studentVle.csv from: https://analyse.kmi.open.ac.uk/open_dataset
+data/studentVle.csv
+data/raw/studentVle.csv
+data/raw/studentVle.csv.zip
+Data/studentVle.csv
+DATA/studentVle.csv
 
 # ── Graph pipeline — large binary artifacts ───────────────────────────────
 # Regenerate with: python src/run_graph_pipeline.py --week 8
