@@ -1,323 +1,253 @@
-# OULAD Student Success Prediction - Baseline Analysis
+# OULAD Student Success Prediction
 
 ## Overview
-This repository contains a comprehensive baseline analysis for predicting student success using the Open University Learning Analytics Dataset (OULAD). The analysis implements multiple machine learning models with rigorous evaluation strategies to establish strong baselines for early student risk prediction.
 
-## Dataset: OULAD
-The Open University Learning Analytics Dataset contains data from 32,593 students across 22 course presentations.
+This repository implements an end-to-end student at-risk prediction pipeline using the [Open University Learning Analytics Dataset (OULAD)](https://analyse.kmi.open.ac.uk/open_dataset). The project progresses through two phases:
 
-### Label Convention (CORRECTED)
+- **Phase 1 — Tabular Baselines**: Strong LightGBM/XGBoost baselines evaluated under random-student and Leave-Course-Presentation-Out (LCPO) splits across four temporal prediction windows (Weeks 2, 4, 6, 8).
+- **Phase 2 — Graph Pipeline** *(current)*: A leakage-safe, enrollment-centric heterogeneous graph built from the same OULAD tables. Graph artifacts, reusable split utilities, and 12 visualizations are committed. GraphSAGE training and GNN vs. LightGBM comparison are planned for the next iteration.
 
-**Important**: This project uses the following label convention for identifying at-risk students:
+---
 
-- **At-Risk (1)**: Students who Fail or Withdraw - **positive class** requiring intervention
-- **Success (0)**: Students who Pass or achieve Distinction - negative class
+## Target Definition
 
-**Class Distribution**:
-- At-risk (1): 17,208 students (52.8%)
-- Success (0): 15,385 students (47.2%)
+| Label | Meaning | Final Result |
+|---|---|---|
+| `1 = at-risk` | Positive class — requires intervention | Fail **or** Withdrawn |
+| `0 = success` | Negative class | Pass **or** Distinction |
 
-**Metrics Interpretation**: All metrics (precision, recall, F1, AUPRC) refer to identifying at-risk students (positive class = 1).
+**All reported Precision, Recall, F1, and AUPRC refer to the at-risk class (class 1).**
 
-## Features
+Class distribution: **52.8% at-risk**, 47.2% success (32,593 total enrollments).
 
-### Feature Categories
-1. **VLE Activity Features** (Virtual Learning Environment)
-   - `vle_total`: Total clicks across all activities
-   - `vle_mean`: Average clicks per activity
-   - `vle_std`: Standard deviation of clicks
-
-2. **Assessment Features**
-   - `assess_mean`: Average assessment score
-   - `assess_max`: Maximum assessment score
-   - `assess_count`: Number of assessments completed
-
-3. **Demographic Features**
-   - Gender, age band, education level
-   - Region, IMD band (deprivation index)
-   - Number of previous attempts
-   - Disability status
-
-### Temporal Windows
-Predictions are made at four time points to enable early intervention:
-- **Week 2**: Very early prediction (limited data)
-- **Week 4**: Early prediction
-- **Week 6**: Mid-term prediction
-- **Week 8**: Later prediction (more reliable)
-
-### Leakage Prevention
-All features are temporally filtered to only include data available up to the prediction window, preventing data leakage from future information.
-
-## Models Evaluated
-
-### Baseline Models
-1. **Majority Classifier**: Always predicts the majority class (baseline reference)
-2. **Logistic Regression**: Linear model with L2 regularization
-3. **Random Forest**: Ensemble of 100 decision trees
-4. **XGBoost**: Gradient boosting with 100 estimators
-5. **LightGBM**: Fast gradient boosting with 100 estimators
-
-### Feature Subsets
-To understand feature importance, we evaluate models on:
-- **VLE-only**: Only VLE activity features
-- **Assessment-only**: Only assessment performance features
-- **VLE+Assessment**: Combined activity and assessment features
-- **All features**: Complete feature set including demographics
-
-## Evaluation Metrics
-
-All models are evaluated using 6 comprehensive metrics:
-1. **AUROC** (Area Under ROC Curve): Overall discrimination ability
-2. **AUPRC** (Area Under Precision-Recall Curve): Performance on imbalanced data
-3. **F1 Score**: Harmonic mean of precision and recall
-4. **Precision**: Accuracy of positive predictions
-5. **Recall**: Coverage of actual positive cases
-6. **Balanced Accuracy**: Average of sensitivity and specificity
-
-## Results
-
-### Baseline Results (5-Fold Cross-Validation)
-
-#### Week 8 Performance (All Features)
-| Model | AUROC | AUPRC | F1 | Precision | Recall | Balanced Acc |
-|-------|-------|-------|-------|-----------|--------|--------------|
-| Majority | 0.500±0.000 | 0.527±0.000 | 0.690±0.000 | 0.527±0.000 | 1.000±0.000 | 0.500±0.000 |
-| LogisticRegression | 0.772±0.005 | 0.769±0.007 | 0.730±0.005 | 0.694±0.005 | 0.770±0.007 | 0.696±0.006 |
-| RandomForest | 0.825±0.004 | 0.806±0.006 | 0.777±0.004 | 0.741±0.006 | 0.816±0.003 | 0.749±0.006 |
-| XGBoost | 0.824±0.004 | 0.809±0.005 | 0.775±0.003 | 0.737±0.003 | 0.818±0.004 | 0.746±0.004 |
-| **LightGBM** | **0.835±0.005** | **0.823±0.006** | **0.788±0.004** | **0.740±0.005** | **0.842±0.003** | **0.757±0.005** |
-
-### Key Findings
-
-1. **Best Model**: LightGBM achieves the highest performance across all metrics at Week 8
-   - AUROC: 0.835 (excellent discrimination)
-   - F1: 0.788 (strong balance of precision/recall)
-   - Recall: 0.842 (identifies 84% of at-risk students)
-
-2. **Temporal Progression**: Performance improves significantly with more data
-   - Week 2 AUROC: 0.714 (LightGBM)
-   - Week 8 AUROC: 0.835 (LightGBM)
-   - +17% improvement with additional 6 weeks of data
-
-3. **Feature Importance**:
-   - Assessment features alone: AUROC ~0.78 (Week 8)
-   - VLE features alone: AUROC ~0.71 (Week 8)
-   - Combined features: AUROC ~0.80 (Week 8)
-   - All features (including demographics): AUROC ~0.84 (Week 8)
-   - **Demographics add ~4% AUROC improvement**
-
-4. **Model Comparison**:
-   - Tree-based models (RF, XGBoost, LightGBM) outperform Logistic Regression
-   - LightGBM shows best performance with lowest variance
-   - All models significantly outperform majority baseline
-
-### LCPO Evaluation (Leave-Course-Presentation-Out)
-
-To test generalization across different courses, we performed LCPO cross-validation where each course presentation is held out as a test set.
-
-#### Random Split vs LCPO Comparison (Week 8)
-| Model | Split | AUROC | F1 | Balanced Acc |
-|-------|-------|-------|-------|--------------|
-| LogisticRegression | Random | 0.772±0.005 | 0.730±0.005 | 0.696±0.006 |
-| LogisticRegression | LCPO | 0.768±0.079 | 0.656±0.269 | 0.682±0.084 |
-| RandomForest | Random | 0.825±0.004 | 0.777±0.004 | 0.749±0.006 |
-| RandomForest | LCPO | 0.792±0.094 | 0.750±0.065 | 0.720±0.076 |
-| XGBoost | Random | 0.824±0.004 | 0.775±0.003 | 0.746±0.004 |
-| XGBoost | LCPO | 0.792±0.087 | 0.745±0.081 | 0.716±0.076 |
-| **LightGBM** | Random | **0.835±0.005** | **0.788±0.004** | **0.757±0.005** |
-| **LightGBM** | LCPO | **0.804±0.087** | **0.758±0.066** | **0.726±0.074** |
-
-#### LCPO Insights
-1. **Generalization Gap**: 3-4% AUROC drop when testing on unseen courses
-2. **Course Variability**: High standard deviation in LCPO (±0.087) indicates significant performance variation across courses
-3. **Challenging Courses**: GGG courses show lower performance (AUROC ~0.60-0.63), suggesting course-specific characteristics
-4. **Best Courses**: DDD, FFF, and EEE courses show excellent generalization (AUROC >0.85)
-5. **Model Robustness**: LightGBM maintains best performance even in LCPO setting
+---
 
 ## Repository Structure
 
 ```
 OULAD/
-├── src/                                    # Source code
-│   ├── config.py                           # Configuration (paths, hyperparameters)
-│   ├── baseline_evaluation.py             # Main baseline evaluation script
-│   ├── lcpo_evaluation.py                 # LCPO cross-validation script
-│   └── load_results.py                    # Results loading utilities
-├── results/                                # Evaluation results
-│   ├── baseline/                           # Baseline evaluation results
-│   │   ├── baseline_results_detailed.csv
-│   │   ├── baseline_results_table.csv
-│   │   └── baseline_results_plot.png
-│   ├── lcpo/                               # LCPO evaluation results
-│   │   ├── lcpo_results_detailed.csv
-│   │   └── random_vs_lcpo_comparison.csv
-│   └── cross_course/                       # Cross-course evaluation results
-├── docs/                                   # Documentation
-│   ├── LEAKAGE_PREVENTION.md              # Data leakage prevention guide
-│   ├── EVALUATION_SPLITS.md               # Evaluation split strategies
-│   ├── GRAPH_SCHEMA.md                    # Heterogeneous graph schema
-│   ├── PHASE1_TEST_RESULTS.md             # Phase 1 test documentation
-│   └── OULAD_IMPLEMENTATION_GUIDE.md      # Implementation guide
-├── notebooks/                              # Jupyter notebooks
-│   └── OULAD_analysis.ipynb               # Main analysis notebook
-├── DATA/                                   # OULAD dataset files (gitignored)
-│   ├── studentInfo.csv
-│   ├── studentVle.csv
-│   ├── studentAssessment.csv
-│   ├── assessments.csv
-│   ├── courses.csv
-│   ├── vle.csv
-│   └── studentRegistration.csv
-├── models/                                 # Saved models directory
-├── requirements.txt                        # Python dependencies
-├── .gitignore                              # Git ignore rules
-└── README.md                               # This file
+├── src/
+│   ├── config.py                    # Centralized paths, hyperparameters
+│   ├── oulad_data.py                # Shared data utilities:
+│   │                                #   load_oulad_data, filter_window,
+│   │                                #   build_features, evaluate_metrics,
+│   │                                #   random_student_split, lcpo_split
+│   ├── graph_pipeline.py            # 7-stage heterogeneous graph pipeline
+│   ├── run_graph_pipeline.py        # CLI entry point: --week {2,4,6,8}
+│   ├── graph_validation.py          # Graph integrity + statistics reporting
+│   ├── baseline_evaluation.py       # Random-student 5-fold CV (5 models × 4 feature sets)
+│   ├── lcpo_evaluation.py           # Leave-Course-Presentation-Out evaluation
+│   ├── feature_importance_analysis.py
+│   ├── threshold_optimization.py
+│   ├── future_presentation_evaluation.py
+│   └── gnn_model.py                 # GNN architecture stub (next iteration)
+├── notebooks/
+│   └── OULAD_Graph_Analysis_Final.ipynb   # Canonical graph notebook (44 cells, 12 charts)
+├── tests/
+│   └── test_splits.py               # 13 unit tests for split utilities (all passing)
+├── data/
+│   ├── raw/                         # Place OULAD CSVs here (studentVle.csv gitignored, 433 MB)
+│   └── processed/
+├── results/
+│   ├── baseline/                    # Baseline CV results + plots
+│   ├── lcpo/                        # LCPO results
+│   ├── feature_importance/
+│   ├── threshold_optimization/
+│   └── graph/
+│       ├── artifacts/               # Graph PNGs + metadata JSON (parquet/csv gitignored)
+│       └── validation/              # week08_validation_summary.txt + JSON reports
+├── docs/
+│   ├── validation_report_week8.md   # Week 8 graph audit trail
+│   ├── LEAKAGE_PREVENTION.md
+│   ├── EVALUATION_SPLITS.md
+│   └── GRAPH_SCHEMA.md
+├── .python-version                  # pyenv 3.11.11
+├── requirements.txt
+└── QUICK_START.md                   # Fresh-clone setup commands
 ```
 
-### Key Documentation
+---
 
-- **[LEAKAGE_PREVENTION.md](docs/LEAKAGE_PREVENTION.md)**: Comprehensive guide on preventing temporal data leakage
-- **[EVALUATION_SPLITS.md](docs/EVALUATION_SPLITS.md)**: Documentation of evaluation strategies (random, LCPO, future-presentation)
-- **[GRAPH_SCHEMA.md](docs/GRAPH_SCHEMA.md)**: Heterogeneous graph schema for GNN models
-- **[PHASE1_TEST_RESULTS.md](docs/PHASE1_TEST_RESULTS.md)**: Phase 1 implementation test results
+## Setup
 
-## Setup and Installation
+### Prerequisites
 
-### 1. Create Virtual Environment
+- [pyenv](https://github.com/pyenv/pyenv) with Python 3.11.11 installed
+- `studentVle.csv` downloaded from [OULAD](https://analyse.kmi.open.ac.uk/open_dataset) and placed in `data/raw/`
+
+### Install
+
 ```bash
-python3 -m venv oulad_env
-source oulad_env/bin/activate  # On Windows: oulad_env\Scripts\activate
-```
+git clone https://github.com/BioAI-Systems-Lab/CourseAware.git
+cd CourseAware
 
-### 2. Install Dependencies
-```bash
+# Python 3.11.11 is pinned via .python-version — pyenv picks it up automatically
+python -m venv oulad_env
+source oulad_env/bin/activate
 pip install -r requirements.txt
+
+# PyTorch + PyTorch Geometric (CPU)
+pip install torch torch-geometric --index-url https://download.pytorch.org/whl/cpu
+# CUDA 12.1: replace URL with https://download.pytorch.org/whl/cu121
+
+# Place studentVle.csv in data/raw/ (all other CSVs are already in the repo)
+# Download from: https://analyse.kmi.open.ac.uk/open_dataset
 ```
 
-### 3. Run Baseline Analysis
+### Build Week 8 Graph
 
 ```bash
-cd src
-python baseline_evaluation.py
+python src/run_graph_pipeline.py --week 8
 ```
 
-This will:
-- Load and preprocess OULAD data from `DATA/` directory
-- Build features for weeks 2, 4, 6, 8 with temporal filtering
-- Evaluate 5 models on 4 feature subsets
-- Generate results in `results/baseline/`:
-  - `baseline_results_detailed.csv`
-  - `baseline_results_table.csv`
-  - `baseline_results_plot.png`
+Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/graph/artifacts/week08_metadata.json`.
 
-### 4. Run LCPO Evaluation
+---
+
+## Phase 1 — Tabular Baselines
+
+### Approach
+
+- **Supervised unit**: enrollment `(id_student, code_module, code_presentation)`
+- **Assessment filtering**: `assessments.date ≤ window` (due date, not submission date — prevents leakage)
+- **Student split**: `GroupKFold` on `id_student` — same student cannot appear in both train and test
+- **5 models × 4 feature subsets × 4 temporal windows**
+
+### Week 8 Results — All Features, Random-Student 5-Fold CV
+
+| Model | AUROC | AUPRC | F1 | Precision | Recall | Bal. Acc |
+|---|---|---|---|---|---|---|
+| Majority | 0.500 | 0.527 | 0.690 | 0.527 | 1.000 | 0.500 |
+| Logistic Regression | 0.772 | 0.769 | 0.730 | 0.694 | 0.770 | 0.696 |
+| Random Forest | 0.825 | 0.806 | 0.777 | 0.741 | 0.816 | 0.749 |
+| XGBoost | 0.824 | 0.809 | 0.775 | 0.737 | 0.818 | 0.746 |
+| **LightGBM** | **0.835** | **0.823** | **0.788** | **0.740** | **0.842** | **0.757** |
+
+### LCPO Results — LightGBM Week 8
+
+| Split | AUROC | F1 | Bal. Acc |
+|---|---|---|---|
+| Random-student | 0.835 ± 0.005 | 0.788 ± 0.004 | 0.757 ± 0.005 |
+| LCPO | 0.804 ± 0.087 | 0.758 ± 0.066 | 0.726 ± 0.074 |
+
+3–4% AUROC drop from random to LCPO reflects realistic cross-course generalization. High LCPO variance (±0.087) indicates course-specific difficulty — GGG courses AUROC ~0.60–0.63, DDD/FFF/EEE >0.85.
+
+### Temporal Progression (LightGBM, All Features)
+
+| Window | AUROC |
+|---|---|
+| Week 2 | 0.714 |
+| Week 4 | 0.781 |
+| Week 6 | 0.812 |
+| Week 8 | 0.835 |
+
+---
+
+## Phase 2 — Heterogeneous Graph Pipeline
+
+### Graph Schema (Week 8, cutoff = 56 days)
+
+**Node types**
+
+| Type | Count | Features |
+|---|---|---|
+| `student` | 28,785 | gender, region, education, imd_band, age_band, prev_attempts, credits, disability |
+| `course_presentation` | 22 | module, presentation, length |
+| `assessment` | 40 | type (TMA/CMA/Exam), weight, due_date |
+| `vle_resource` | 6,364 | activity_type, week_from, week_to |
+
+**Edge types**
+
+| Type | Count | Features |
+|---|---|---|
+| `enrolled_in` | 32,593 | — |
+| `contains_assess` | 40 | — |
+| `has_resource` | 6,364 | — |
+| `submitted` | 47,259 | score |
+| `interacted_with` | 1,056,217 | total_clicks, n_interactions, first_day, last_day, active_days |
+
+### Pipeline Stages
+
+```
+load_raw_tables()
+  → apply_window_cutoff()      # assessments filtered on due_date ≤ window
+  → build_node_tables()        # explicit null imputation: numeric→0, categorical→"Unknown"
+  → build_edge_tables()
+  → build_enrollment_supervision()
+  → validate_graph_integrity()
+  → materialize_graph_artifacts()
+```
+
+**Week 8 validation**: zero duplicates, zero dangling edges, zero post-imputation nulls, 52.8% at-risk rate, runtime ~6.6 s. Full report: [`docs/validation_report_week8.md`](docs/validation_report_week8.md).
+
+### Split Utilities (`src/oulad_data.py`)
+
+```python
+# Student-level split — same student never appears in more than one partition
+train_mask, val_mask, test_mask = random_student_split(
+    enrollments, val_frac=0.1, test_frac=0.2, seed=42
+)
+# Week 8: 22,801 train / 3,280 val / 6,512 test rows — zero student overlap verified
+
+# Leave-Course-Presentation-Out
+train_mask, test_mask = lcpo_split(enrollments, "BBB", "2013J")
+# All 22 course-presentations yield non-empty splits — verified by test suite
+```
+
+### Tests
 
 ```bash
-cd src
-python lcpo_evaluation.py
+source oulad_env/bin/activate
+pytest tests/test_splits.py -v   # 13/13 passing
 ```
 
-This will:
-- Perform leave-course-presentation-out cross-validation
-- Compare with random split results
-- Generate results in `results/lcpo/`:
-  - `lcpo_results_detailed.csv`
-  - `random_vs_lcpo_comparison.csv`
+### Canonical Notebook
 
-### 5. Configuration
+`notebooks/OULAD_Graph_Analysis_Final.ipynb` — 44 cells, fully executed, 12 embedded charts:
 
-All paths and hyperparameters are centralized in `src/config.py`. You can modify:
-- Data directory location
-- Results output directories
-- Model hyperparameters
-- Prediction windows
-- Feature groups
+**Statistical charts**: at-risk rate by course, class balance, split quality, enrollments per student, graph scale, VLE degree/click distributions, LCPO split comparison, daily VLE activity.
 
-## Key Observations
+**Network charts**: heterogeneous graph schema, course × VLE activity-type bipartite, sampled student–course enrollment graph, assessment score vs. VLE clicks scatter.
 
-### 1. Early Prediction is Challenging
-- Week 2 performance (AUROC ~0.71) is significantly lower than Week 8 (AUROC ~0.84)
-- Assessment data is sparse early in the course
-- VLE activity patterns take time to establish
+---
 
-### 2. Assessment Performance is Highly Predictive
-- Assessment-only features achieve AUROC ~0.78 at Week 8
-- Stronger than VLE-only features (AUROC ~0.71)
-- Suggests academic performance is the strongest indicator
+## Key Design Decisions
 
-### 3. Demographics Add Value
-- Including demographics improves AUROC by ~4%
-- Particularly important for early prediction (Week 2-4)
-- Helps when behavioral data is limited
+| Decision | Rule |
+|---|---|
+| Assessment temporal filter | `assessments.date ≤ window` (due date), **not** `date_submitted` |
+| Null imputation | Numeric → `0`, categorical → `"Unknown"` (consistent across tabular + graph) |
+| Supervised unit | Enrollment `(id_student, code_module, code_presentation)` — not student node |
+| Student overlap | Guaranteed zero overlap between train and test via `random_student_split` |
+| Metrics positive class | At-risk (`target=1`) throughout — Precision, Recall, F1, AUPRC all refer to class 1 |
+| Python version | 3.11.11 via pyenv (PyTorch-compatible; pinned in `.python-version`) |
 
-### 4. Course-Specific Challenges
-- GGG courses show consistently lower performance
-- May require course-specific models or features
-- Suggests different student populations or course structures
+---
 
-### 5. Model Selection
-- LightGBM provides best overall performance
-- Random Forest is a close second
-- Both significantly outperform linear models
-- Tree-based models better capture non-linear patterns
+## Next Steps
 
-## Future Work
+- [ ] Train GraphSAGE on Week 8 graph using `random_student_split` and LCPO splits
+- [ ] Compare GNN vs. LightGBM fairly under identical evaluation conditions
+- [ ] Extend graph pipeline to Weeks 2, 4, 6
 
-### 1. Hyperparameter Tuning
-- Grid search or Bayesian optimization for each model
-- May improve performance by 2-5%
-- Focus on LightGBM and Random Forest
-
-### 2. Feature Engineering
-- Temporal patterns (trend, acceleration)
-- Interaction features (VLE × Assessment)
-- Course-specific features
-- Social network features (forum participation)
-
-### 3. Advanced Models
-- Deep learning (LSTM for temporal sequences)
-- Attention mechanisms for activity patterns
-- Multi-task learning (predict final grade + dropout)
-
-### 4. Course-Specific Models
-- Train separate models for challenging courses (GGG)
-- Transfer learning from high-performing courses
-- Meta-learning across course presentations
-
-### 5. Interpretability
-- SHAP values for feature importance
-- Individual prediction explanations
-- Identify intervention points
-
-### 6. Deployment
-- Real-time prediction API
-- Dashboard for instructors
-- Automated alert system for at-risk students
+---
 
 ## Citation
 
-If you use this code or analysis, please cite:
-
 ```bibtex
-@misc{oulad_baseline_2026,
-  title={OULAD Student Success Prediction: Comprehensive Baseline Analysis},
-  author={BioAI Systems Lab},
-  year={2026},
-  url={https://github.com/BioAI-Systems-Lab/CourseAware}
+@misc{oulad_courseaware_2026,
+  title  = {OULAD Student Success Prediction: Tabular Baselines and Heterogeneous Graph Pipeline},
+  author = {BioAI Systems Lab},
+  year   = {2026},
+  url    = {https://github.com/BioAI-Systems-Lab/CourseAware}
 }
 ```
 
+Dataset citation:
+> Kuzilek J., Hlosta M., Zdrahal Z. (2017) Open University Learning Analytics dataset. *Scientific Data* 4:170171. doi:10.1038/sdata.2017.171
+
+---
+
 ## License
 
-This project is licensed under the MIT License.
-
-## Acknowledgments
-
-- Open University for providing the OULAD dataset
-- Kuzilek J., Hlosta M., Zdrahal Z. (2017) Open University Learning Analytics dataset. Scientific Data 4:170171
-
-## Contact
-
-For questions or collaboration:
-- GitHub: https://github.com/BioAI-Systems-Lab/CourseAware
-- Issues: https://github.com/BioAI-Systems-Lab/CourseAware/issues
+MIT License — see [LICENSE](LICENSE).
