@@ -2,204 +2,146 @@
 
 ## Overview
 
-This document describes the three evaluation split strategies used to assess model performance and generalization in the OULAD student success prediction task. Each strategy tests different aspects of model robustness and real-world applicability.
+This document describes the three evaluation split strategies used to assess model performance
+and generalization in the OULAD student success prediction task. All three strategies are
+implemented in `src/evaluation_pipeline.py` and can be reproduced end-to-end by running:
+
+```bash
+python src/run_evaluation.py
+```
 
 ## Label Convention
 
-**Important**: All evaluations use the corrected label convention:
-- **1 = at-risk** (Fail/Withdrawn) - positive class, students needing intervention
-- **0 = success** (Pass/Distinction) - negative class, students on track
+**All evaluations use the corrected label convention:**
+- **1 = at-risk** (Fail/Withdrawn) — positive class, students needing intervention
+- **0 = success** (Pass/Distinction) — negative class, students on track
 
 Metrics (precision, recall, F1, AUPRC) refer to identifying at-risk students.
 
-## Split Strategy 1: Random Student-Course Split
+---
+
+## Split Strategy 1: Random Student Split (5-fold GroupKFold CV)
 
 ### Description
 
-Standard stratified k-fold cross-validation where student-course pairs are randomly split into train and test sets.
+5-fold cross-validation where splits are made at the **student level**, guaranteeing that the
+same student never appears in both train and test within a fold.
 
 ### Implementation
 
 ```python
-from sklearn.model_selection import StratifiedKFold
+from evaluation_pipeline import run_random_student_evaluation
+from oulad_data import create_datasets, load_oulad_data
 
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-for train_idx, test_idx in cv.split(X, y):
-    X_train, X_test = X[train_idx], X[test_idx]
-    y_train, y_test = y[train_idx], y[test_idx]
-    # Train and evaluate
+student_info, student_vle, student_assess, assessments = load_oulad_data()
+datasets = create_datasets(student_info, student_vle, student_assess, assessments)
+random_df = run_random_student_evaluation(datasets)
 ```
+
+The function uses `GroupKFold` on `id_student` — students are shuffled with `random_state=42`
+and assigned to folds round-robin. This correctly prevents any student appearing in both train
+and test within a fold.
 
 ### Characteristics
 
-- **Split Unit**: Individual student-course enrollments
-- **Stratification**: Maintains class balance (at-risk vs success) in each fold
-- **Randomization**: Shuffled with fixed random seed (42) for reproducibility
-- **Folds**: 5-fold cross-validation
+- **Split Unit**: Unique students (not enrollments)
+- **Method**: 5-fold `GroupKFold` on `id_student`
+- **Folds**: 5
+- **Feature subsets evaluated**: VLE_only, Assessment_only, VLE+Assessment, All_features
 
-### What It Tests
+### Results (Week 8, All Features)
 
-- **Within-distribution performance**: How well models perform when train and test data come from the same distribution
-- **Statistical reliability**: Cross-validation provides confidence intervals (mean ± std)
-- **Baseline performance**: Establishes upper bound on expected performance
-
-### Advantages
-
-✓ Standard evaluation approach, easy to compare with literature  
-✓ Maximizes training data usage  
-✓ Provides robust performance estimates with confidence intervals  
-✓ Tests model's ability to generalize to unseen students in same courses
-
-### Limitations
-
-✗ May overestimate performance in deployment (train and test from same courses)  
-✗ Doesn't test cross-course generalization  
-✗ Doesn't test temporal generalization
+| Model | AUROC | F1 | Precision | Recall |
+|-------|-------|----|-----------|--------|
+| LightGBM | 0.865±0.006 | 0.785±0.008 | 0.837±0.006 | 0.739±0.011 |
+| XGBoost | 0.858±0.006 | — | — | — |
+| RandomForest | 0.857±0.005 | — | — | — |
 
 ### Results Location
 
-- Detailed results: `results/baseline/detailed_results_all_features.csv`
-- Summary table: `results/baseline/baseline_results_table.csv`
+- Detailed (per fold): `results/baseline/baseline_results_detailed.csv`
+- Summary (mean±std): `results/baseline/baseline_results_table.csv`
 
-### Expected Performance
-
-Based on Week 8, All Features:
-- AUROC: 0.83-0.84
-- F1: 0.78-0.79
-- Recall: 0.84-0.85
+---
 
 ## Split Strategy 2: Leave-Course-Presentation-Out (LCPO)
 
 ### Description
 
-Cross-validation where each unique course-presentation combination is held out as a test set, and the model is trained on all other course-presentations.
+For each of the 22 unique `(code_module, code_presentation)` pairs in OULAD, hold it out as
+the test set and train on all remaining enrollments. Uses the canonical `lcpo_split()` from
+`src/oulad_data.py`.
 
 ### Implementation
 
 ```python
-# Get unique course presentations
-course_presentations = df[["code_module", "code_presentation"]].drop_duplicates()
+from evaluation_pipeline import run_lcpo_evaluation
 
-for _, cp_row in course_presentations.iterrows():
-    module = cp_row["code_module"]
-    presentation = cp_row["code_presentation"]
-    
-    # Split data
-    test_mask = (df["code_module"] == module) & (df["code_presentation"] == presentation)
-    train_mask = ~test_mask
-    
-    X_train, X_test = X[train_mask], X[test_mask]
-    y_train, y_test = y[train_mask], y[test_mask]
-    # Train and evaluate
+lcpo_df = run_lcpo_evaluation(datasets)
 ```
+
+The function iterates all 22 course-presentations, calls `lcpo_split()` from `oulad_data.py`
+for each, and evaluates all 4 models (LR, RF, XGBoost, LightGBM) with All_features.
 
 ### Characteristics
 
 - **Split Unit**: Course-presentation combinations (e.g., AAA-2013B, BBB-2014J)
-- **Number of Folds**: 22 (one for each course presentation in OULAD)
-- **Train Size**: ~21/22 of data per fold
-- **Test Size**: ~1/22 of data per fold
-
-### What It Tests
-
-- **Cross-course generalization**: Can models trained on some courses predict outcomes in completely unseen courses?
-- **Course-specific effects**: How much does performance vary across different courses?
-- **Robustness**: Are models overfitting to specific course characteristics?
-
-### Advantages
-
-✓ Tests realistic deployment scenario (new course offerings)  
-✓ Identifies course-specific challenges  
-✓ Reveals generalization gaps  
-✓ Provides course-level performance analysis
-
-### Limitations
-
-✗ Some test sets may be small (< 100 students)  
-✗ High variance in performance across courses  
-✗ Computationally expensive (22 train-test iterations)
+- **Number of Folds**: 22 (one per course-presentation)
+- **Train Size**: ~21/22 of data per fold (~31,000 enrollments)
+- **Test Size**: ~1/22 of data per fold (~350–2,500 enrollments)
 
 ### Course-Presentation Combinations
 
-OULAD contains 22 unique course-presentation pairs:
-
 | Module | Presentations | Total |
 |--------|---------------|-------|
-| AAA | 2013B, 2013J, 2014B, 2014J | 4 |
+| AAA | 2013J, 2014J | 2 |
 | BBB | 2013B, 2013J, 2014B, 2014J | 4 |
 | CCC | 2014B, 2014J | 2 |
 | DDD | 2013B, 2013J, 2014B, 2014J | 4 |
 | EEE | 2013J, 2014B, 2014J | 3 |
 | FFF | 2013B, 2013J, 2014B, 2014J | 4 |
-| GGG | 2013J, 2014J | 2 |
+| GGG | 2013J, 2014B, 2014J | 3 |
+
+### Results (Week 8, All Features)
+
+| Model | AUROC | F1 | Balanced Acc |
+|-------|-------|----|--------------|
+| LightGBM | 0.838±0.077 | 0.737±0.103 | — |
+| XGBoost | ~0.833 | — | — |
 
 ### Results Location
 
-- Detailed results: `results/lcpo/lcpo_results_detailed.csv`
-- Comparison with random split: `results/lcpo/random_vs_lcpo_comparison.csv`
-- Course-level analysis: `results/lcpo/course_level_performance.csv`
+- Detailed (per course-presentation): `results/lcpo/lcpo_results_detailed.csv`
+- Random vs LCPO comparison: `results/lcpo/random_vs_lcpo_comparison.csv`
+- Course difficulty ranking: `results/lcpo/course_presentation_difficulty.csv`
+- Course difficulty chart: `results/lcpo/course_difficulty_chart.png`
 
-### Expected Performance
-
-Based on Week 8, All Features:
-- AUROC: 0.80-0.81 (3-4% drop from random split)
-- F1: 0.75-0.76
-- High variance: ±0.08-0.09 (indicates course-specific effects)
-
-### Course Difficulty Analysis
-
-**Challenging Courses** (AUROC < 0.70):
-- GGG courses: Lower performance, may need course-specific models
-
-**High-Performing Courses** (AUROC > 0.85):
-- DDD, FFF, EEE courses: Excellent generalization
+---
 
 ## Split Strategy 3: Future-Presentation Split
 
 ### Description
 
-Temporal split where models are trained on earlier course presentations and tested on later presentations, simulating deployment to future course offerings.
+Temporal split where models are trained on earlier presentations (2013B, 2013J, 2014B) and
+tested on the latest presentation (2014J), simulating deployment to future course offerings.
 
 ### Implementation
 
 ```python
-# Define temporal split
-train_presentations = ["2013B", "2013J", "2014B"]
-test_presentations = ["2014J"]
+from evaluation_pipeline import run_future_presentation_evaluation
 
-# Split by presentation year/semester
-train_mask = df["code_presentation"].isin(train_presentations)
-test_mask = df["code_presentation"].isin(test_presentations)
-
-X_train, X_test = X[train_mask], X[test_mask]
-y_train, y_test = y[train_mask], y[test_mask]
+future_df = run_future_presentation_evaluation(datasets)
 ```
+
+Train presentations: `["2013B", "2013J", "2014B"]`  
+Test presentation: `["2014J"]`
 
 ### Characteristics
 
-- **Split Unit**: Presentation time period
-- **Train**: Earlier presentations (2013B, 2013J, 2014B)
-- **Test**: Later presentations (2014J)
-- **Temporal Order**: Strictly enforced (no future data in training)
-
-### What It Tests
-
-- **Temporal generalization**: Can models trained on past data predict future outcomes?
-- **Concept drift**: Do student behaviors or course characteristics change over time?
-- **Deployment realism**: Most realistic evaluation for production deployment
-
-### Advantages
-
-✓ Most realistic deployment scenario  
-✓ Tests temporal stability  
-✓ Identifies concept drift  
-✓ Single train-test split (fast evaluation)
-
-### Limitations
-
-✗ Limited test data (only 2014J presentations)  
-✗ May not have enough temporal separation to detect drift  
-✗ Imbalanced train/test sizes
+- **Split Unit**: Presentation year/semester
+- **Temporal Order**: Strictly enforced — no 2014J data in training
+- **Train size** (Week 8): ~21,333 enrollments
+- **Test size** (Week 8): ~11,260 enrollments
 
 ### Presentation Timeline
 
@@ -208,138 +150,146 @@ y_train, y_test = y[train_mask], y[test_mask]
 2013J (Oct 2013) ─┤ TRAIN
 2014B (Feb 2014) ─┘
                    │
-2014J (Oct 2014) ──┘ TEST
+2014J (Oct 2014) ──  TEST
 ```
+
+### Results (Week 8, All Features)
+
+| Model | AUROC | F1 | Precision | Recall |
+|-------|-------|----|-----------|--------|
+| RandomForest | 0.846 | 0.771 | 0.768 | 0.775 |
+| LightGBM | 0.836 | — | — | — |
 
 ### Results Location
 
-- Results: `results/cross_course/future_presentation_results.csv`
-- Temporal analysis: `results/cross_course/temporal_generalization_analysis.csv`
+- Full results: `results/cross_course/future_presentation_results.csv`
 
-### Expected Performance
+---
 
-Hypothesis: Similar to LCPO performance (0.80-0.81 AUROC) if no significant concept drift.
+## Comparison of Split Strategies (Week 8, LightGBM)
 
-## Comparison of Split Strategies
-
-| Aspect | Random Split | LCPO | Future-Presentation |
-|--------|-------------|------|---------------------|
+| Aspect | Random-Student | LCPO | Future-Presentation |
+|--------|---------------|------|---------------------|
+| **AUROC** | 0.865±0.006 | 0.838±0.077 | 0.836 |
 | **Realism** | Low | Medium | High |
 | **Generalization Test** | Within-distribution | Cross-course | Temporal |
-| **Performance** | Highest | Medium | Medium-Low |
-| **Variance** | Low | High | Medium |
-| **Computation** | Fast | Slow | Fast |
-| **Use Case** | Baseline | New courses | Future offerings |
+| **Variance** | Low | High (±0.077) | None (single eval) |
+| **Computation** | Medium (5-fold CV) | Slow (22 folds) | Fast |
+| **Use Case** | Baseline upper bound | New course offerings | Future cohorts |
 
-## Preprocessing Steps (Common to All Splits)
+---
 
-### 1. Data Loading
+## Course Difficulty Analysis
 
-```python
-from config import DATA_DIR
+LCPO reveals significant variation across course-presentations. AUROC is aggregated across
+all 4 models and 4 prediction windows (16 measurements per course-presentation).
 
-student_info = pd.read_csv(DATA_DIR / "studentInfo.csv")
-student_vle = pd.read_csv(DATA_DIR / "studentVle.csv")
-student_assess = pd.read_csv(DATA_DIR / "studentAssessment.csv")
-assessments = pd.read_csv(DATA_DIR / "assessments.csv")
+### Hardest to Generalize To (AUROC < 0.70)
+
+| Course | AUROC mean | AUROC std |
+|--------|-----------|-----------|
+| GGG/2013J | 0.628 | 0.016 |
+| GGG/2014B | 0.639 | 0.018 |
+| GGG/2014J | 0.665 | 0.015 |
+
+GGG consistently has the lowest generalization performance across all models and windows.
+This suggests course-specific characteristics that don't transfer well from other modules.
+
+### Easiest to Generalize To (AUROC > 0.84)
+
+| Course | AUROC mean | AUROC std |
+|--------|-----------|-----------|
+| CCC/2014B | 0.850 | 0.047 |
+| FFF/2014J | 0.844 | 0.035 |
+| EEE/2014J | 0.836 | 0.041 |
+
+Full ranking: `results/lcpo/course_presentation_difficulty.csv`  
+Chart: `results/lcpo/course_difficulty_chart.png`
+
+---
+
+## Unified Comparison Table
+
+A single CSV covering all 4 weeks × 5 models × 3 splits is saved at:
+
+```
+results/comparison/all_splits_comparison.csv
 ```
 
-### 2. Target Creation
+Columns: `Week, Model, Split, AUROC_mean, AUROC_std, F1_mean, F1_std, Precision_mean,
+Precision_std, Recall_mean, Recall_std, Balanced_Acc_mean, Balanced_Acc_std`
 
-```python
-# CORRECTED label convention
-student_info["target"] = student_info["final_result"].apply(
-    lambda x: 1 if x in ["Fail", "Withdrawn"] else 0
-)
+---
+
+## Result File Index
+
+| File | Description |
+|------|-------------|
+| `results/baseline/baseline_results_detailed.csv` | Random split: all weeks × models × feature subsets × folds |
+| `results/baseline/baseline_results_table.csv` | Random split summary (mean±std) |
+| `results/lcpo/lcpo_results_detailed.csv` | LCPO: all weeks × models × course-presentations |
+| `results/lcpo/random_vs_lcpo_comparison.csv` | Random vs LCPO per model (Week 8) |
+| `results/lcpo/course_presentation_difficulty.csv` | Per-course AUROC mean±std, sorted hardest first |
+| `results/lcpo/course_difficulty_chart.png` | Boxplot of per-course AUROC distribution |
+| `results/cross_course/future_presentation_results.csv` | Future-presentation: all weeks × models |
+| `results/comparison/all_splits_comparison.csv` | Unified: all weeks × models × all 3 splits |
+| `results/overall_summary.csv` | Top-level summary: best model per split for Week 8 |
+
+---
+
+## Reproducing All Results
+
+```bash
+# From the project root
+python src/run_evaluation.py
 ```
 
-### 3. Temporal Filtering
+This regenerates all result CSVs and the course difficulty chart from scratch. Runtime is
+approximately 10–15 minutes on a standard laptop.
 
-```python
-# For each prediction window (weeks 2, 4, 6, 8)
-window_days = week * 7
-vle_filtered = student_vle[student_vle["date"] <= window_days]
-assess_filtered = student_assess[student_assess["date"] <= window_days]
-```
+---
 
-### 4. Feature Engineering
+## Preprocessing (Common to All Splits)
 
-```python
-# VLE features
-vle_features = vle_filtered.groupby(["id_student", "code_module", "code_presentation"]).agg({
-    "sum_click": ["sum", "mean", "std"]
-})
+All splits use the same shared utilities from `src/oulad_data.py`:
 
-# Assessment features
-assess_features = assess_filtered.groupby(["id_student", "code_module", "code_presentation"]).agg({
-    "score": ["mean", "max"],
-    "date": "count"
-})
+### Temporal Filtering
 
-# Merge with demographics
-features = vle_features.merge(assess_features).merge(student_info)
-```
+`filter_window(vle, assess, assessments, window)` filters:
+- VLE interactions: `date <= window`
+- Assessments: `assessments.date` (due date) `<= window` — **not submission date**, which
+  would leak future behaviour
 
-### 5. Feature Preparation
+### Feature Engineering
 
-```python
-# Drop non-feature columns
-X = features.drop(columns=[
-    "target", "final_result", "id_student", 
-    "code_module", "code_presentation"
-])
+`build_features(vle_w, assess_w, student_info)` produces one row per enrollment with:
+- **VLE features**: `vle_total`, `vle_mean`, `vle_std` (aggregated sum_click)
+- **Assessment features**: `assess_mean`, `assess_max`, `assess_count` (aggregated score)
+- **Demographics**: gender, region, highest_education, imd_band, age_band,
+  num_of_prev_attempts, disability
+- Missing values: numeric → 0, categorical → "Unknown"
 
-# One-hot encode categorical features
-X_encoded = pd.get_dummies(X)
+### Models
 
-# Target
-y = features["target"]
-```
+| Name | Class | Key Params |
+|------|-------|-----------|
+| Majority | DummyClassifier | strategy="most_frequent" |
+| LogisticRegression | LogisticRegression | max_iter=1000, random_state=42 |
+| RandomForest | RandomForestClassifier | n_estimators=100, n_jobs=-1, random_state=42 |
+| XGBoost | XGBClassifier | n_estimators=100, eval_metric="logloss", random_state=42 |
+| LightGBM | LGBMClassifier | n_estimators=100, verbose=-1, random_state=42 |
 
-### 6. Missing Value Handling
-
-```python
-# Numerical features: fill with 0 (no activity)
-num_cols = X.select_dtypes(include=[np.number]).columns
-X[num_cols] = X[num_cols].fillna(0)
-
-# Categorical features: fill with "Unknown"
-cat_cols = X.select_dtypes(include=["object"]).columns
-X[cat_cols] = X[cat_cols].fillna("Unknown")
-```
+---
 
 ## Evaluation Metrics
 
-All splits use the same metrics:
+All splits report the same 6 metrics (positive class = 1 = at-risk):
 
-1. **AUROC** (Area Under ROC Curve): Overall discrimination ability
-2. **AUPRC** (Area Under Precision-Recall Curve): Performance on imbalanced data
-3. **F1 Score**: Harmonic mean of precision and recall
-4. **Precision**: Accuracy of at-risk predictions
-5. **Recall**: Coverage of actual at-risk students
-6. **Balanced Accuracy**: Average of sensitivity and specificity
-
-## Reproducibility
-
-All splits use fixed random seeds:
-- Random split: `random_state=42`
-- LCPO: Deterministic (no randomness)
-- Future-presentation: Deterministic (temporal order)
-
-## Best Practices
-
-1. **Always use stratification** for random splits to maintain class balance
-2. **Check test set size** in LCPO (skip if < 50 samples or single class)
-3. **Verify temporal order** in future-presentation split
-4. **Report both mean and std** for random split and LCPO
-5. **Document split definitions** for reproducibility
-
-## Conclusion
-
-Using multiple evaluation strategies provides a comprehensive assessment of model performance:
-
-- **Random split**: Establishes baseline performance
-- **LCPO**: Tests cross-course generalization
-- **Future-presentation**: Tests temporal generalization
-
-Together, these splits reveal both the potential and limitations of our models for real-world deployment.
+| Metric | Description |
+|--------|-------------|
+| AUROC | Area Under ROC Curve — overall discrimination |
+| AUPRC | Area Under Precision-Recall Curve — imbalanced class performance |
+| F1 | Harmonic mean of precision and recall |
+| Precision | Fraction of at-risk predictions that are correct |
+| Recall | Fraction of actual at-risk students identified |
+| Balanced_Acc | Average of sensitivity and specificity |
