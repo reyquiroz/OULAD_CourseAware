@@ -1,5 +1,58 @@
 """
 Shared OULAD data utilities for baseline and graph pipelines.
+
+Public API
+----------
+load_oulad_data()         Load core OULAD tables; attach binary risk label.
+load_supplementary_tables() Load vle, courses, studentRegistration tables.
+filter_window()           Filter VLE interactions and assessment submissions
+                          to records available by a prediction cutoff (dual guard:
+                          due_date <= window AND date_submitted <= window).
+build_features()          Build one feature row per enrollment.
+sanitize_feature_names()  Sanitize column names for XGBoost / LightGBM.
+evaluate_metrics()        Compute standard binary-classification metrics.
+create_datasets()         Convenience wrapper: build per-week feature tables.
+random_student_split()    Student-level train/val/test masks (no student overlap).
+lcpo_split()              Leave-Course-Presentation-Out train/test masks.
+
+Split utilities — graph pipeline usage
+---------------------------------------
+``random_student_split`` and ``lcpo_split`` operate on any DataFrame that has
+an ``id_student`` column (and ``code_module`` / ``code_presentation`` for LCPO).
+They are the canonical split utilities for **both** the tabular baseline pipeline
+and the GNN training pipeline.
+
+Typical graph usage::
+
+    from graph_pipeline import (
+        load_raw_tables, apply_window_cutoff,
+        build_node_tables, build_edge_tables,
+        build_enrollment_supervision,
+    )
+    from oulad_data import random_student_split, lcpo_split
+
+    # Build the Week 8 graph
+    raw      = load_raw_tables()
+    filtered = apply_window_cutoff(raw, window_days=56)
+    nodes    = build_node_tables(filtered)
+    edges    = build_edge_tables(filtered, nodes)
+    enrollments = build_enrollment_supervision(filtered)
+    # enrollments has columns: id_student, code_module, code_presentation,
+    #                          final_result, target
+
+    # Random student split (70 / 10 / 20)
+    train_mask, val_mask, test_mask = random_student_split(
+        enrollments, val_frac=0.1, test_frac=0.2, seed=42
+    )
+    train_enroll = enrollments[train_mask]
+    val_enroll   = enrollments[val_mask]
+    test_enroll  = enrollments[test_mask]
+
+    # LCPO split — hold out BBB/2013J
+    train_mask, test_mask = lcpo_split(enrollments, "BBB", "2013J")
+
+The masks index directly into the enrollment supervision table.  Pass them to
+your GNN training loop to select the relevant node indices.
 """
 
 from pathlib import Path
@@ -54,18 +107,53 @@ def load_supplementary_tables(data_dir=None):
 def filter_window(vle, assess, assessments, window):
     """Filter VLE and assessment submissions to records available by *window*.
 
-    Assessments are included only if their due date (assessments.date) falls on
-    or before *window*.  Using the submission date would leak future behaviour
-    (a student could submit after the prediction cutoff).
+    Two independent guards are applied to assessment submissions (Strategy B —
+    strictly leakage-free):
+
+    1. Due-date guard  — ``assessments.date <= window``
+       An assessment whose due date falls after the prediction cutoff is not yet
+       "available" to a student, so its existence is unknown.
+
+    2. Submission-date guard — ``studentAssessment.date_submitted <= window``
+       Even if an assessment was due within the window, a score submitted *after*
+       the cutoff would not be observable at prediction time.  In OULAD, 28.8% of
+       all submissions carry a ``date_submitted`` greater than their due date
+       (late extensions, grace periods).  Excluding them prevents a subtle form of
+       future leakage.
+
+    Note: ``date_submitted`` has no null values in OULAD (all 173,912 submission
+    rows are populated), so the second guard never silently drops valid rows.
+
+    Empirical impact (LightGBM, 5-fold GroupKFold CV):
+        Week 2: AUROC delta  −0.0006  (100 rows dropped,  8.4%)
+        Week 4: AUROC delta  −0.0009  (650 rows dropped,  2.9%)
+        Week 6: AUROC delta  +0.0004  (538 rows dropped,  1.8%)
+        Week 8: AUROC delta  +0.0024  (2332 rows dropped, 4.9%)
+    All deltas are within ±1 std of either strategy — negligible performance impact.
+
+    Args:
+        vle:         studentVle DataFrame with a ``date`` column (interaction day).
+        assess:      studentAssessment DataFrame with ``id_assessment``,
+                     ``date_submitted``, ``score`` columns.
+        assessments: assessments metadata DataFrame with ``id_assessment``,
+                     ``date`` (due date) columns.
+        window:      Prediction cutoff in days from course start (inclusive).
+
+    Returns:
+        Tuple (vle_w, assess_w) — filtered copies of the input DataFrames.
     """
     vle_w = vle[vle["date"] <= window].copy()
 
+    # Attach due date from assessments metadata
     assess_with_dates = assess.merge(
         assessments[["id_assessment", "code_module", "code_presentation", "date"]],
         on="id_assessment",
         how="left",
     )
+    # Guard 1: assessment must have been due by the prediction cutoff
     assess_w = assess_with_dates[assess_with_dates["date"] <= window].copy()
+    # Guard 2: submission must have occurred by the prediction cutoff
+    assess_w = assess_w[assess_w["date_submitted"] <= window].copy()
 
     return vle_w, assess_w
 
@@ -145,9 +233,15 @@ def random_student_split(enrollments_df, val_frac=0.1, test_frac=0.2, seed=42):
     applied at the student level then broadcast to all enrollment rows for
     that student.
 
+    This function is the canonical split utility for **both** the tabular
+    baseline pipeline (used via 5-fold GroupKFold CV in evaluation_pipeline.py)
+    and the GNN training pipeline (used directly on the enrollment supervision
+    table from build_enrollment_supervision()).
+
     Args:
         enrollments_df: DataFrame with an ``id_student`` column (one row per
-                        enrollment, as produced by build_enrollment_supervision).
+                        enrollment, as produced by build_enrollment_supervision
+                        or build_features).
         val_frac:        Fraction of unique students assigned to validation.
         test_frac:       Fraction of unique students assigned to test.
         seed:            Random seed for reproducibility.
@@ -158,6 +252,21 @@ def random_student_split(enrollments_df, val_frac=0.1, test_frac=0.2, seed=42):
 
     Raises:
         ValueError: if any resulting split would be empty.
+
+    Examples:
+        Graph pipeline usage::
+
+            from graph_pipeline import build_enrollment_supervision
+            from oulad_data import random_student_split
+
+            enrollments = build_enrollment_supervision(filtered)
+            train_mask, val_mask, test_mask = random_student_split(
+                enrollments, val_frac=0.1, test_frac=0.2, seed=42
+            )
+            # Index enrollment supervision table with masks
+            train_enroll = enrollments[train_mask]
+            # train_enroll contains only students assigned to train
+            # — guaranteed no student overlap with val or test sets
     """
     rng = np.random.default_rng(seed)
     unique_students = np.array(enrollments_df["id_student"].unique())
@@ -202,9 +311,14 @@ def lcpo_split(enrollments_df, held_out_module, held_out_presentation):
     **and** ``code_presentation == held_out_presentation``.  The train set is
     the complement.
 
+    This function is the canonical LCPO split utility for **both** the tabular
+    baseline pipeline and the GNN training pipeline.
+
     Args:
         enrollments_df:       DataFrame with ``id_student``, ``code_module``,
-                              and ``code_presentation`` columns.
+                              and ``code_presentation`` columns (one row per
+                              enrollment, as produced by build_enrollment_supervision
+                              or build_features).
         held_out_module:      Module code to hold out (e.g. ``"BBB"``).
         held_out_presentation: Presentation code to hold out (e.g. ``"2013J"``).
 
@@ -214,6 +328,26 @@ def lcpo_split(enrollments_df, held_out_module, held_out_presentation):
 
     Raises:
         ValueError: if either resulting split would be empty.
+
+    Examples:
+        Graph pipeline usage (iterate all 22 course-presentations)::
+
+            from graph_pipeline import build_enrollment_supervision
+            from oulad_data import lcpo_split
+
+            enrollments = build_enrollment_supervision(filtered)
+            course_presentations = (
+                enrollments[["code_module", "code_presentation"]]
+                .drop_duplicates()
+                .sort_values(["code_module", "code_presentation"])
+            )
+            for _, row in course_presentations.iterrows():
+                train_mask, test_mask = lcpo_split(
+                    enrollments, row["code_module"], row["code_presentation"]
+                )
+                train_enroll = enrollments[train_mask]
+                test_enroll  = enrollments[test_mask]
+                # train on train_enroll node indices, evaluate on test_enroll
     """
     test_mask = (
         (enrollments_df["code_module"] == held_out_module)

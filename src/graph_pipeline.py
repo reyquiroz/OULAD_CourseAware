@@ -188,6 +188,23 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     # Strategy mirrors oulad_data.build_features(): numeric → 0,
     # categorical → "Unknown".  node_idx is excluded (always integer).
     # Pre-imputation null counts are printed for audit transparency.
+    #
+    # Expected null sources (from raw OULAD source data — not bugs):
+    #
+    #   nodes_student.imd_band (~971 nulls):
+    #     The Index of Multiple Deprivation band is absent for students
+    #     whose postcode could not be geocoded.  This is a known property
+    #     of the OULAD dataset.  These students are imputed to "Unknown"
+    #     (categorical imputation).
+    #
+    #   nodes_vle_resource.week_from / week_to (~5,243 nulls each):
+    #     Many VLE resources in vle.csv carry no scheduled week range —
+    #     the columns are blank in the source file for resources that are
+    #     available throughout the course.  These are imputed to 0
+    #     (numeric imputation; 0 means "no scheduled week constraint").
+    #
+    # All other node and edge tables have zero pre-imputation nulls.
+    # The post-imputation assertion below confirms zero nulls after fill.
     # ------------------------------------------------------------------
     for ntype, ndf in nodes.items():
         feat_cols = [c for c in ndf.columns if c != "node_idx"]

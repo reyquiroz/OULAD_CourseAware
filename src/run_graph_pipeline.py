@@ -113,6 +113,10 @@ def _build_metadata(week: int, window_days: int, result: dict) -> dict:
 def main():
     args = parse_args()
 
+    # Preflight: verify all required data files exist before running
+    from check_data import check_data_files
+    check_data_files(args.data_dir)
+
     save_dir = Path(args.save_dir) if args.save_dir else GRAPH_ARTIFACTS_DIR
 
     print(f"Running graph pipeline for Week {args.week}...")

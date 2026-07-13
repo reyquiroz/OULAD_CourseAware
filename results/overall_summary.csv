@@ -1,4 +1,4 @@
 Evaluation,Best_Model,AUROC,F1,Precision,Recall
-Baseline / Random-Student (Week 8),LightGBM,0.865±0.006,0.785±0.008,0.837±0.006,0.739±0.011
-LCPO (Week 8),LightGBM,0.838±0.077,0.737±0.103,0.764±0.155,0.729±0.097
-Future-Presentation (Week 8),RandomForest,0.846,0.771,0.768,0.775
+Baseline / Random-Student (Week 8),LightGBM,0.863±0.004,0.782±0.005,0.830±0.005,0.738±0.009
+LCPO (Week 8),LightGBM,0.835±0.078,0.734±0.107,0.759±0.161,0.729±0.099
+Future-Presentation (Week 8),RandomForest,0.843,0.766,0.770,0.761

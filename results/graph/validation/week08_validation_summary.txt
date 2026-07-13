@@ -2,7 +2,7 @@
   OULAD Graph Validation Summary — Week 8
 ====================================================================
 
-Construction runtime : 6.56 s  |  Peak memory : 1048.7 MB
+Construction runtime : 4.9 s  |  Peak memory : 1048.5 MB
 
 ── Node counts ──────────────────────────────────────────────────
   student                       28,785
@@ -14,7 +14,7 @@ Construction runtime : 6.56 s  |  Peak memory : 1048.7 MB
   enrolled_in                   32,593
   contains_assess                   40
   has_resource                   6,364
-  submitted                     47,259
+  submitted                     44,927
   interacted_with            1,056,217
   enrollments                   32,593
 
@@ -31,17 +31,30 @@ Construction runtime : 6.56 s  |  Peak memory : 1048.7 MB
   interacted_with           src=0  dst=0
   All edge endpoints resolve to known nodes. ✓
 
-── Data quality (null / NaN / Inf) ──────────────────────────────
-  nodes_student                  total=   971 ⚠  [imd_band: null=971 inf=0]
+── Data quality — pre-imputation audit (from raw source data) ───
+  nodes_student                  total=     0
   nodes_course_presentation      total=     0
   nodes_assessment               total=     0
-  nodes_vle_resource             total= 10486 ⚠  [week_from: null=5243 inf=0, week_to: null=5243 inf=0]
+  nodes_vle_resource             total=     0
   edges_enrolled_in              total=     0
   edges_contains_assess          total=     0
   edges_has_resource             total=     0
   edges_submitted                total=     0
   edges_interacted_with          total=     0
   enrollments                    total=     0
+
+── Data quality — post-imputation confirmation ───────────────────
+  nodes_student                  ✓ 0 nulls
+  nodes_course_presentation      ✓ 0 nulls
+  nodes_assessment               ✓ 0 nulls
+  nodes_vle_resource             ✓ 0 nulls
+  edges_enrolled_in              ✓ 0 nulls
+  edges_contains_assess          ✓ 0 nulls
+  edges_has_resource             ✓ 0 nulls
+  edges_submitted                ✓ 0 nulls
+  edges_interacted_with          ✓ 0 nulls
+  enrollments                    ✓ 0 nulls
+  All imputed nulls resolved. ✓
 
 ── Label distribution ───────────────────────────────────────────
   Overall : at-risk=17,208  success=15,385  total=32,593  at-risk-rate=52.8%

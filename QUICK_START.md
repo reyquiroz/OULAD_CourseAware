@@ -1,25 +1,22 @@
-# OULAD Analysis - Quick Start Guide
+# OULAD Analysis — Quick Start Guide
 
-**Last Updated**: June 2026
-
-This guide provides the exact commands to run all analysis scripts in the correct order.
+**Last Updated**: July 2026
 
 ---
 
-## Reproducibility: Fresh Clone Setup
+## Fresh Clone Setup
 
-To reproduce all results from a clean clone:
+Steps to reproduce all results from a clean clone:
 
 ```bash
 # 1. Clone and enter the project
 git clone <repo-url>
 cd OULAD
 
-# 2. Set Python version via pyenv (Python 3.11.11, PyTorch-compatible)
+# 2. Python 3.11.11 is pinned via .python-version — pyenv picks it up automatically
 pyenv install 3.11.11   # skip if already installed
-# .python-version file already pins the version — no extra command needed
 
-# 3. Create virtual environment and install base dependencies
+# 3. Create virtual environment and install dependencies
 python -m venv oulad_env
 source oulad_env/bin/activate
 pip install --upgrade pip
@@ -27,16 +24,33 @@ pip install -r requirements.txt
 
 # 4. Install PyTorch and PyTorch Geometric (CPU)
 pip install torch torch-geometric --index-url https://download.pytorch.org/whl/cpu
-# For CUDA 12.1 replace the URL with: https://download.pytorch.org/whl/cu121
+# CUDA 12.1: replace URL with https://download.pytorch.org/whl/cu121
 
-# 5. Place OULAD CSV data files in data/raw/
-#    Download from: https://analyse.kmi.open.ac.uk/open_dataset
-ls data/raw/*.csv   # should list 7 CSV files
+# 5. Download the OULAD dataset and place CSV files in data/raw/
+#    Download URL: https://analyse.kmi.open.ac.uk/open_dataset
+#
+#    Required files (all 7 must be present):
+#
+#    File                      Size        Tracked in git?
+#    ─────────────────────────────────────────────────────
+#    studentInfo.csv           ~3 MB       ✓ yes
+#    studentVle.csv            ~433 MB     ✗ NO — gitignored, MUST DOWNLOAD
+#    studentAssessment.csv     ~6 MB       ✓ yes
+#    assessments.csv           ~10 KB      ✓ yes
+#    courses.csv               ~1 KB       ✓ yes
+#    vle.csv                   ~500 KB     ✓ yes
+#    studentRegistration.csv   ~1.5 MB     ✓ yes
+#
+#    Verify all 7 files are present:
+python src/check_data.py
 
-# 6. Build the Week 8 graph and run validation
+# 6. Run the complete evaluation pipeline (all 3 split strategies, ~10-15 min)
+python src/run_evaluation.py
+
+# 7. Build the Week 8 graph and run validation (~6 s)
 python src/run_graph_pipeline.py --week 8
 
-# 7. Open the canonical graph analysis notebook
+# 8. Open the canonical graph analysis notebook
 jupyter lab notebooks/OULAD_Graph_Analysis_Final.ipynb
 ```
 
@@ -49,66 +63,80 @@ Full validation details: `docs/validation_report_week8.md`
 
 ### 1. Activate Virtual Environment
 ```bash
-cd /path/to/OULAD
 source oulad_env/bin/activate
 ```
 
-### 2. Verify Data Exists
+### 2. Verify Data Files
 ```bash
-ls -lh data/raw/*.csv
+python src/check_data.py
 ```
 
-You should see:
-- studentInfo.csv
-- studentVle.csv
-- studentAssessment.csv
-- assessments.csv
-- vle.csv
-- courses.csv
+Expected output — all 7 files marked ✓:
+```
+  ✓ studentInfo.csv              ~3 MB
+  ✓ studentVle.csv               ~433 MB    (gitignored — download separately)
+  ✓ studentAssessment.csv        ~6 MB
+  ✓ assessments.csv              ~10 KB
+  ✓ courses.csv                  ~1 KB
+  ✓ vle.csv                      ~500 KB
+  ✓ studentRegistration.csv      ~1.5 MB
+```
 
 ---
 
-## Phase 1: Run Base Evaluations (6-8 hours total)
+## Run All Evaluations (single command)
 
-### Step 1: Baseline Evaluation (2-3 hours)
 ```bash
-cd src
-python baseline_evaluation.py
+# From project root — runs all 3 split strategies, saves all result CSVs
+python src/run_evaluation.py
 ```
 
-**What it does**: Random 5-fold CV across weeks 2, 4, 6, 8
-
-**Outputs**:
-- `baseline_results_detailed.csv`
-- `baseline_results_table.csv`
-- `baseline_results_plot.png`
+**Outputs** (all under `results/`):
+- `baseline/baseline_results_detailed.csv` — random-student 5-fold CV
+- `baseline/baseline_results_table.csv`
+- `lcpo/lcpo_results_detailed.csv` — 22-fold LCPO
+- `lcpo/random_vs_lcpo_comparison.csv`
+- `lcpo/course_presentation_difficulty.csv`
+- `lcpo/course_difficulty_chart.png`
+- `cross_course/future_presentation_results.csv`
+- `comparison/all_splits_comparison.csv` — unified 4 weeks × 5 models × 3 splits
+- `overall_summary.csv`
 
 ---
 
-### Step 2: LCPO Evaluation (2-3 hours)
+## Build Week 8 Graph
+
 ```bash
-cd src
-python lcpo_evaluation.py
+python src/run_graph_pipeline.py --week 8
 ```
 
-**What it does**: Leave-Course-Presentation-Out cross-validation
+**What it does**: Runs all 7 pipeline stages (load → filter → nodes → edges →
+enrollments → validate → persist).  Assessment filtering uses the strictly
+leakage-free dual guard: `due_date ≤ window` **AND** `date_submitted ≤ window`.
 
 **Outputs**:
-- `results/lcpo/lcpo_results_detailed.csv`
-- `results/lcpo/lcpo_summary.csv`
+- `results/graph/artifacts/week08_*.parquet` (10 files, gitignored — regenerate locally)
+- `results/graph/artifacts/week08_metadata.json`
+- `results/graph/validation/week08_validation_summary.txt`
+- `results/graph/validation/week08_integrity.json`
+
+**Validation report**: `docs/validation_report_week8.md`
+
+> GNN training (GraphSAGE) is planned for the next iteration.
 
 ---
 
-### Step 3: Future-Presentation Evaluation (1-2 hours)
+## Advanced Analysis (optional)
+
+### Feature Importance
 ```bash
-cd src
-python future_presentation_evaluation.py
+python src/feature_importance_analysis.py
 ```
 
-**What it does**: Temporal generalization testing
-
-**Outputs**:
-- `results/cross_course/future_presentation_results.csv`
+### Threshold Optimization
+```bash
+python src/threshold_optimization.py
+```
 
 ---
 

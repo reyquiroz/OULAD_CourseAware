@@ -83,7 +83,7 @@
     "enrolled_in": 32593,
     "contains_assess": 40,
     "has_resource": 6364,
-    "submitted": 47259,
+    "submitted": 44927,
     "interacted_with": 1056217
   },
   "enrollment_count": 32593,
@@ -102,6 +102,6 @@
     "edges_interacted_with": "week08_edges_interacted_with.parquet",
     "enrollments": "week08_enrollments.parquet"
   },
-  "elapsed_seconds": 6.56,
-  "peak_memory_mb": 1048.7
+  "elapsed_seconds": 4.9,
+  "peak_memory_mb": 1048.5
 }

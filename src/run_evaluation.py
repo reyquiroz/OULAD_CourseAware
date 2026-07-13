@@ -28,6 +28,7 @@ from config import (
     PREDICTION_WINDOWS,
     RESULTS_DIR,
 )
+from check_data import check_data_files
 from oulad_data import create_datasets, load_oulad_data
 from evaluation_pipeline import (
     analyze_course_difficulty,
@@ -84,6 +85,9 @@ def main():
     print("=" * 80)
     print("OULAD EVALUATION PIPELINE — Full Run")
     print("=" * 80)
+
+    # Preflight: verify all required data files exist before running
+    check_data_files()
 
     # ------------------------------------------------------------------ #
     # 1. Load data                                                         #
