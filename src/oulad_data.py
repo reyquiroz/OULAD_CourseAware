@@ -104,7 +104,7 @@ def load_supplementary_tables(data_dir=None):
     return vle, courses, student_registration
 
 
-def filter_window(vle, assess, assessments, window):
+def filter_window(vle, assess, assessments, window, submission_date_guard: bool = True):
     """Filter VLE and assessment submissions to records available by *window*.
 
     Two independent guards are applied to assessment submissions (Strategy B —
@@ -132,12 +132,15 @@ def filter_window(vle, assess, assessments, window):
     All deltas are within ±1 std of either strategy — negligible performance impact.
 
     Args:
-        vle:         studentVle DataFrame with a ``date`` column (interaction day).
-        assess:      studentAssessment DataFrame with ``id_assessment``,
-                     ``date_submitted``, ``score`` columns.
-        assessments: assessments metadata DataFrame with ``id_assessment``,
-                     ``date`` (due date) columns.
-        window:      Prediction cutoff in days from course start (inclusive).
+        vle:                   studentVle DataFrame with a ``date`` column (interaction day).
+        assess:                studentAssessment DataFrame with ``id_assessment``,
+                               ``date_submitted``, ``score`` columns.
+        assessments:           assessments metadata DataFrame with ``id_assessment``,
+                               ``date`` (due date) columns.
+        window:                Prediction cutoff in days from course start (inclusive).
+        submission_date_guard: When ``True`` (default), Guard 2 is applied.
+                               Set to ``False`` to replicate the Strategy A
+                               (due-date-only) behaviour for comparison purposes.
 
     Returns:
         Tuple (vle_w, assess_w) — filtered copies of the input DataFrames.
@@ -152,8 +155,9 @@ def filter_window(vle, assess, assessments, window):
     )
     # Guard 1: assessment must have been due by the prediction cutoff
     assess_w = assess_with_dates[assess_with_dates["date"] <= window].copy()
-    # Guard 2: submission must have occurred by the prediction cutoff
-    assess_w = assess_w[assess_w["date_submitted"] <= window].copy()
+    # Guard 2: submission must have occurred by the prediction cutoff (Strategy B)
+    if submission_date_guard:
+        assess_w = assess_w[assess_w["date_submitted"] <= window].copy()
 
     return vle_w, assess_w
 
@@ -213,11 +217,26 @@ def evaluate_metrics(y_true, y_pred, y_proba):
     }
 
 
-def create_datasets(student_info, student_vle, student_assess, assessments, weeks=(2, 4, 6, 8)):
-    """Create per-week feature tables."""
+def create_datasets(
+    student_info,
+    student_vle,
+    student_assess,
+    assessments,
+    weeks=(2, 4, 6, 8),
+    submission_date_guard: bool = True,
+):
+    """Create per-week feature tables.
+
+    Args:
+        submission_date_guard: Forwarded to ``filter_window()``.  Set to
+            ``False`` to use Strategy A (due-date-only) filtering.
+    """
     datasets = {}
     for week in weeks:
-        vle_w, assess_w = filter_window(student_vle, student_assess, assessments, week * 7)
+        vle_w, assess_w = filter_window(
+            student_vle, student_assess, assessments, week * 7,
+            submission_date_guard=submission_date_guard,
+        )
         datasets[week] = build_features(vle_w, assess_w, student_info)
     return datasets
 

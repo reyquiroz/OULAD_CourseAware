@@ -206,10 +206,14 @@ def run_validation(week: int, artifacts_dir: Path, validation_dir: Path) -> dict
     # Derive the expected cutoff from the artifact prefix / metadata
     meta_path = ad / f"{prefix}_metadata.json"
     window_days: int = week * 7  # fallback
+    max_date_submitted_meta: int | None = None
+    pre_imputation_nulls_meta: dict = {}
     if meta_path.exists():
         with open(meta_path) as f:
             meta = json.load(f)
         window_days = int(meta.get("window_days", window_days))
+        max_date_submitted_meta = meta.get("max_date_submitted")
+        pre_imputation_nulls_meta = meta.get("pre_imputation_nulls", {})
 
     temporal: dict = {"window_days": window_days, "checks": {}}
 
@@ -249,6 +253,18 @@ def run_validation(week: int, artifacts_dir: Path, validation_dir: Path) -> dict
             "note": "Every aggregated interaction record must have >=1 click.",
         }
 
+    # max_date_submitted — from metadata JSON (date_submitted is dropped from saved edge)
+    if max_date_submitted_meta is not None:
+        temporal["checks"]["submitted_max_date_submitted"] = {
+            "value": max_date_submitted_meta,
+            "threshold": window_days,
+            "compliant": bool(max_date_submitted_meta <= window_days),
+            "note": (
+                "Guard 2 (Strategy B): max date_submitted in filtered submissions "
+                "must be <= window_days. Value sourced from metadata JSON."
+            ),
+        }
+
     # Submitted score: should be >= 0 (nulls are filled to 0 by the pipeline)
     sub_df = edges["submitted"]
     if "score" in sub_df.columns:
@@ -285,6 +301,7 @@ def run_validation(week: int, artifacts_dir: Path, validation_dir: Path) -> dict
         "duplicate_enrollments": dup_enrollments,
         "dangling_edges":     dangling_edges,
         "data_quality":       data_quality,
+        "pre_imputation_nulls": pre_imputation_nulls_meta,
         "label_distribution": {
             "overall":            label_overall,
             "by_course_presentation": label_by_cp,
@@ -374,42 +391,58 @@ def _build_summary(r: dict) -> list:
     lines.append("")
 
     # Data quality — pre-imputation audit
-    # NOTE: non-zero counts below are EXPECTED from raw OULAD source data
-    # and are resolved by the pipeline's imputation step.  See the
-    # post-imputation confirmation section that follows.
-    #
+    # Actual counts are sourced from metadata JSON (recorded at pipeline construction
+    # time, before the saved artifacts were imputed).  Non-zero counts are EXPECTED
+    # from raw OULAD source data and are resolved by the pipeline's imputation step.
     # Known expected nulls:
     #   nodes_student.imd_band       : ~971  (missing deprivation band)
     #   nodes_vle_resource.week_from : ~5243 (no scheduled week in vle.csv)
     #   nodes_vle_resource.week_to   : ~5243 (no scheduled week in vle.csv)
-    lines.append("── Data quality — pre-imputation audit (from raw source data) ───")
-    any_unexpected = False
-    _expected_nulls = {
+    lines.append("── Data quality — pre-imputation audit (from pipeline metadata) ──")
+    pre_nulls_meta = r.get("pre_imputation_nulls", {})
+    # Build a flattened set of "known expected" columns per artifact key.
+    # Source of truth is the metadata JSON; the hardcoded set is just a fallback
+    # for artifact keys that appear in data_quality but not in the metadata.
+    _fallback_expected = {
         "nodes_student":      {"imd_band"},
         "nodes_vle_resource": {"week_from", "week_to"},
     }
+    any_unexpected = False
     for artifact, dq in r["data_quality"].items():
-        total = dq["total_null_inf"]
-        if total > 0:
-            by_col = dq["by_column"]
-            # Determine if every flagged column is in the expected set
-            unexpected_cols = [
-                c for c in by_col
-                if c not in _expected_nulls.get(artifact, set())
-            ]
-            if unexpected_cols:
-                any_unexpected = True
-                flag_char = "⚠ UNEXPECTED"
-            else:
-                flag_char = "expected, resolved by imputation"
-            detail = ", ".join(f"{c}: null={v['null']} inf={v['inf']}"
-                               for c, v in by_col.items())
+        # Strip "nodes_" prefix to match metadata keys (e.g. "nodes_student" → "student")
+        meta_key = artifact.replace("nodes_", "") if artifact.startswith("nodes_") else artifact
+        # Use real counts from metadata if available; fall back to post-imputation totals
+        pre_cols = pre_nulls_meta.get(meta_key, {})
+        if pre_cols:
+            total_pre = sum(pre_cols.values())
+            detail = ", ".join(f"{c}: {n}" for c, n in pre_cols.items())
             lines.append(
-                f"  {artifact:<30} total={total:>6}  [{flag_char}]"
+                f"  {artifact:<30} total={total_pre:>6}  [expected, resolved by imputation]"
                 f"\n    columns: {detail}"
             )
         else:
-            lines.append(f"  {artifact:<30} total={total:>6}")
+            # Post-imputation artifact shows 0 — either no pre-imputation nulls, or
+            # metadata not yet regenerated (re-run run_graph_pipeline.py).
+            post_total = dq["total_null_inf"]
+            if post_total > 0:
+                # Check against the fallback expected set
+                by_col = dq["by_column"]
+                unexpected_cols = [
+                    c for c in by_col
+                    if c not in _fallback_expected.get(artifact, set())
+                ]
+                if unexpected_cols:
+                    any_unexpected = True
+                    flag_char = "⚠ UNEXPECTED"
+                else:
+                    flag_char = "expected (re-run pipeline to record exact counts)"
+                detail = ", ".join(f"{c}: null={v['null']}" for c, v in by_col.items())
+                lines.append(
+                    f"  {artifact:<30} total={post_total:>6}  [{flag_char}]"
+                    f"\n    columns: {detail}"
+                )
+            else:
+                lines.append(f"  {artifact:<30} total=     0")
     lines.append("")
 
     # Post-imputation confirmation — all must be 0

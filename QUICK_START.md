@@ -104,23 +104,48 @@ python src/run_evaluation.py
 
 ---
 
-## Build Week 8 Graph
+## Build All-Week Graphs
+
+Build graphs for all four prediction windows (14 / 28 / 42 / 56 days).
+Each run takes ~5 s and ~1 GB peak memory.
 
 ```bash
+python src/run_graph_pipeline.py --week 2
+python src/run_graph_pipeline.py --week 4
+python src/run_graph_pipeline.py --week 6
 python src/run_graph_pipeline.py --week 8
 ```
 
 **What it does**: Runs all 7 pipeline stages (load → filter → nodes → edges →
-enrollments → validate → persist).  Assessment filtering uses the strictly
-leakage-free dual guard: `due_date ≤ window` **AND** `date_submitted ≤ window`.
+enrollments → validate → persist) for the specified prediction window.
+Assessment filtering uses the strictly leakage-free dual guard:
+`due_date ≤ window` **AND** `date_submitted ≤ window` (Strategy B).
 
-**Outputs**:
-- `results/graph/artifacts/week08_*.parquet` (10 files, gitignored — regenerate locally)
-- `results/graph/artifacts/week08_metadata.json`
-- `results/graph/validation/week08_validation_summary.txt`
-- `results/graph/validation/week08_integrity.json`
+**Outputs per week** (gitignored — regenerate locally):
+- `results/graph/artifacts/week{N}_*.parquet` (10 files)
+- `results/graph/artifacts/week{N}_metadata.json`
+- `results/graph/validation/week{N}_validation_summary.txt`
+- `results/graph/validation/week{N}_integrity.json`
 
-**Validation report**: `docs/validation_report_week8.md`
+**After building all four weeks**, generate split definitions and the
+multi-week summary:
+
+```bash
+python src/save_graph_splits.py        # saves per-week train/val/test + LCPO splits
+python src/summarize_graph_weeks.py    # saves results/graph/validation/all_weeks_summary.csv
+```
+
+**Documentation**:
+- Week 8 detailed audit: `docs/validation_report_week8.md`
+- Multi-week comparison: `docs/graph_validation_summary.md`
+- Schema reference: `docs/GRAPH_SCHEMA.md`
+
+**Then re-execute the canonical notebook** to refresh all embedded outputs:
+
+```bash
+jupyter nbconvert --to notebook --execute --inplace \
+    notebooks/OULAD_Graph_Analysis_Final.ipynb
+```
 
 > GNN training (GraphSAGE) is planned for the next iteration.
 
@@ -204,23 +229,31 @@ python threshold_optimization.py
 
 ---
 
-### Step 7: Build Week 8 Graph (< 10 minutes)
+### Step 7: Build All-Week Graphs (< 30 minutes total)
 
 ```bash
 # From project root
+python src/run_graph_pipeline.py --week 2
+python src/run_graph_pipeline.py --week 4
+python src/run_graph_pipeline.py --week 6
 python src/run_graph_pipeline.py --week 8
+python src/save_graph_splits.py
+python src/summarize_graph_weeks.py
 ```
 
-**What it does**: Runs all 7 pipeline stages (load → filter → nodes → edges → enrollments → validate → persist).
-Assessment filtering uses **due date ≤ 56 days**, not submission date.
+**What it does**: Builds the leakage-safe enrollment-centric graph for each of
+the four prediction windows. Assessment filtering uses **dual guard (Strategy B)**:
+`due_date ≤ window` AND `date_submitted ≤ window`.
 
-**Outputs**:
-- `results/graph/artifacts/week08_*.parquet` (10 files, gitignored — regenerate locally)
-- `results/graph/artifacts/week08_metadata.json`
-- `results/graph/validation/week08_validation_summary.txt`
-- `results/graph/validation/week08_integrity.json`
+**Outputs per week** (gitignored — regenerate locally):
+- `results/graph/artifacts/week{N}_*.parquet` (10 files)
+- `results/graph/artifacts/week{N}_metadata.json`
+- `results/graph/validation/week{N}_validation_summary.txt`
+- `results/graph/evaluation/week{N}/splits/` (4 split definition files)
 
-**Validation report**: `docs/validation_report_week8.md`
+**Summary outputs** (committed):
+- `results/graph/validation/all_weeks_summary.csv`
+- `docs/graph_validation_summary.md`
 
 > GNN training (GraphSAGE) is planned for the following iteration.
 

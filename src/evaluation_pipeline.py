@@ -246,7 +246,7 @@ def run_random_student_evaluation(datasets, weeks=(2, 4, 6, 8)):
                 if fold_aucs:
                     print(
                         f"    {subset_name}: AUROC={np.mean(fold_aucs):.3f}"
-                        f"±{np.std(fold_aucs):.3f}"
+                        f"±{np.std(fold_aucs, ddof=0):.3f}"
                     )
 
     return pd.DataFrame(rows)
@@ -445,9 +445,12 @@ def build_unified_comparison_table(random_df, lcpo_df, future_df):
 
     # --- Random split: aggregate All_features rows across folds ---
     rand_all = random_df[random_df["Features"] == "All_features"].copy()
+    _std0 = lambda x: x.std(ddof=0)   # population std (ddof=0) for all comparisons  # noqa: E731
+    _std0.__name__ = "std"
+
     rand_agg = (
         rand_all.groupby(["Week", "Model"])[metrics]
-        .agg(["mean", "std"])
+        .agg(["mean", _std0])
         .reset_index()
     )
     rand_agg.columns = ["Week", "Model"] + [
@@ -458,7 +461,7 @@ def build_unified_comparison_table(random_df, lcpo_df, future_df):
     # --- LCPO: aggregate across course-presentations ---
     lcpo_agg = (
         lcpo_df.groupby(["Week", "Model"])[metrics]
-        .agg(["mean", "std"])
+        .agg(["mean", _std0])
         .reset_index()
     )
     lcpo_agg.columns = ["Week", "Model"] + [
@@ -512,16 +515,27 @@ def analyze_course_difficulty(lcpo_df, output_dir=None):
 
     agg = (
         lcpo_df.groupby("Course_Presentation")["AUROC"]
-        .agg(AUROC_mean="mean", AUROC_std="std", N_folds="count")
+        .agg(
+            AUROC_mean="mean",
+            AUROC_std=lambda x: x.std(ddof=0),
+            N_folds="count",
+        )
         .reset_index()
         .sort_values("AUROC_mean", ascending=True)
         .reset_index(drop=True)
     )
 
-    # Save CSV
+    # Save aggregated CSV (backward-compatible)
     csv_path = output_dir / "course_presentation_difficulty.csv"
     agg.to_csv(csv_path, index=False)
     print(f"  ✓ Saved course difficulty CSV → {csv_path}")
+
+    # Long-format CSV: one row per (Course_Presentation, Week, Model)
+    # 22 courses × 4 weeks × 5 models = up to 440 rows
+    long_df = lcpo_df[["Course_Presentation", "Week", "Model", "AUROC"]].copy()
+    long_csv = output_dir / "course_difficulty_by_week_model.csv"
+    long_df.to_csv(long_csv, index=False)
+    print(f"  ✓ Saved long-format difficulty CSV → {long_csv}")
 
     # --- Boxplot ---
     # Collect per-course AUROC values (across models and weeks)
@@ -558,3 +572,118 @@ def analyze_course_difficulty(lcpo_df, output_dir=None):
     print(f"  ✓ Saved course difficulty chart → {png_path}")
 
     return agg
+
+
+# ---------------------------------------------------------------------------
+# Strategy A vs B comparison
+# ---------------------------------------------------------------------------
+
+def run_strategy_comparison(data_dir=None, weeks=(2, 4, 6, 8)):
+    """Run random-student 5-fold CV under Strategy A and Strategy B and compare.
+
+    Strategy A — due-date-only filter (``submission_date_guard=False``).
+    Strategy B — dual guard: due-date AND submission-date (``submission_date_guard=True``).
+
+    Both strategies use the same 5-fold GroupKFold seed so fold assignments
+    are identical.  The comparison is restricted to the ``All_features`` subset
+    because that is the primary model evaluation setting.
+
+    Args:
+        data_dir: Optional path to raw OULAD data directory.
+        weeks:    Prediction weeks to evaluate (default: 2, 4, 6, 8).
+
+    Returns:
+        DataFrame with columns:
+            Week, Model,
+            Strategy_A_AUROC_mean, Strategy_A_AUROC_std,
+            Strategy_B_AUROC_mean, Strategy_B_AUROC_std,
+            Delta_AUROC_mean,
+            Rows_Dropped_A, Rows_Dropped_B, Rows_Dropped_Diff,
+            Rows_Dropped_Pct
+    """
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).parent))
+
+    from oulad_data import create_datasets, load_oulad_data, filter_window
+
+    print("Loading OULAD data for strategy comparison …")
+    student_info, student_vle, student_assess, assessments = load_oulad_data(data_dir)
+
+    # Count rows retained per strategy per week (before feature building)
+    row_counts: dict = {}
+    for week in weeks:
+        _, a_assess = filter_window(
+            student_vle, student_assess, assessments, week * 7,
+            submission_date_guard=False,
+        )
+        _, b_assess = filter_window(
+            student_vle, student_assess, assessments, week * 7,
+            submission_date_guard=True,
+        )
+        row_counts[week] = {
+            "strategy_a": len(a_assess),
+            "strategy_b": len(b_assess),
+        }
+
+    print("Building Strategy A datasets (due-date-only) …")
+    datasets_a = create_datasets(
+        student_info, student_vle, student_assess, assessments,
+        weeks=list(weeks), submission_date_guard=False,
+    )
+    print("Building Strategy B datasets (dual guard) …")
+    datasets_b = create_datasets(
+        student_info, student_vle, student_assess, assessments,
+        weeks=list(weeks), submission_date_guard=True,
+    )
+
+    print("\nRunning Strategy A evaluation …")
+    df_a = run_random_student_evaluation(datasets_a, weeks=weeks)
+    print("\nRunning Strategy B evaluation …")
+    df_b = run_random_student_evaluation(datasets_b, weeks=weeks)
+
+    _std0 = lambda x: x.std(ddof=0)  # noqa: E731
+    _std0.__name__ = "std"
+
+    metrics = ["AUROC"]
+
+    def _agg(df):
+        return (
+            df[df["Features"] == "All_features"]
+            .groupby(["Week", "Model"])["AUROC"]
+            .agg(["mean", _std0])
+            .reset_index()
+            .rename(columns={"mean": "AUROC_mean", "std": "AUROC_std"})
+        )
+
+    agg_a = _agg(df_a).rename(
+        columns={"AUROC_mean": "Strategy_A_AUROC_mean", "AUROC_std": "Strategy_A_AUROC_std"}
+    )
+    agg_b = _agg(df_b).rename(
+        columns={"AUROC_mean": "Strategy_B_AUROC_mean", "AUROC_std": "Strategy_B_AUROC_std"}
+    )
+
+    merged = agg_a.merge(agg_b, on=["Week", "Model"])
+    merged["Delta_AUROC_mean"] = (
+        merged["Strategy_B_AUROC_mean"] - merged["Strategy_A_AUROC_mean"]
+    ).round(6)
+
+    merged["Rows_Dropped_A"] = merged["Week"].map(
+        lambda w: row_counts[w]["strategy_a"]
+    )
+    merged["Rows_Dropped_B"] = merged["Week"].map(
+        lambda w: row_counts[w]["strategy_b"]
+    )
+    merged["Rows_Dropped_Diff"] = merged["Rows_Dropped_A"] - merged["Rows_Dropped_B"]
+    merged["Rows_Dropped_Pct"] = (
+        merged["Rows_Dropped_Diff"] / merged["Rows_Dropped_A"] * 100
+    ).round(2)
+
+    col_order = [
+        "Week", "Model",
+        "Strategy_A_AUROC_mean", "Strategy_A_AUROC_std",
+        "Strategy_B_AUROC_mean", "Strategy_B_AUROC_std",
+        "Delta_AUROC_mean",
+        "Rows_Dropped_A", "Rows_Dropped_B", "Rows_Dropped_Diff", "Rows_Dropped_Pct",
+    ]
+    return merged[col_order].sort_values(["Week", "Model"]).reset_index(drop=True)

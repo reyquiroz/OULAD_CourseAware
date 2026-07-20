@@ -54,13 +54,21 @@ def _fmt(mean, std):
     return f"{mean:.3f}±{std:.3f}"
 
 
+def _std0(x):
+    """Population std (ddof=0) for use in .agg() calls."""
+    return x.std(ddof=0)
+
+
+_std0.__name__ = "std"
+
+
 def _summarise_random(df):
     """Return the Week 8 / All_features / best-AUROC row for the summary."""
     w8 = df[(df["Week"] == 8) & (df["Features"] == "All_features")]
     grp = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].mean()
     best = grp["AUROC"].idxmax()
     row = grp.loc[best]
-    std_row = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].std().loc[best]
+    std_row = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].std(ddof=0).loc[best]
     return best, row, std_row
 
 
@@ -68,7 +76,7 @@ def _summarise_lcpo(df):
     """Return the Week 8 / best-AUROC-mean row for the summary."""
     w8 = df[df["Week"] == 8]
     grp_mean = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].mean()
-    grp_std = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].std()
+    grp_std = w8.groupby("Model")[["AUROC", "F1", "Precision", "Recall"]].std(ddof=0)
     best = grp_mean["AUROC"].idxmax()
     return best, grp_mean.loc[best], grp_std.loc[best]
 
@@ -111,7 +119,7 @@ def main():
     metrics = ["AUROC", "AUPRC", "F1", "Precision", "Recall", "Balanced_Acc"]
     summary = (
         random_df.groupby(["Week", "Model", "Features"])[metrics]
-        .agg(["mean", "std"])
+        .agg(["mean", _std0])
     )
     summary.columns = [f"{m}_{s}" for m, s in summary.columns]
     summary = summary.reset_index()
@@ -134,7 +142,7 @@ def main():
     rand_w8 = (
         random_df[(random_df["Week"] == 8) & (random_df["Features"] == "All_features")]
         .groupby("Model")[["AUROC", "F1", "Balanced_Acc"]]
-        .agg(["mean", "std"])
+        .agg(["mean", _std0])
     )
     rand_w8.columns = [f"{m}_{s}" for m, s in rand_w8.columns]
     rand_w8 = rand_w8.reset_index()
@@ -146,7 +154,7 @@ def main():
     lcpo_w8 = (
         lcpo_df[lcpo_df["Week"] == 8]
         .groupby("Model")[["AUROC", "F1", "Balanced_Acc"]]
-        .agg(["mean", "std"])
+        .agg(["mean", _std0])
     )
     lcpo_w8.columns = [f"{m}_{s}" for m, s in lcpo_w8.columns]
     lcpo_w8 = lcpo_w8.reset_index()

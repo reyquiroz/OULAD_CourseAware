@@ -61,6 +61,12 @@ def _build_metadata(week: int, window_days: int, result: dict) -> dict:
     Captures the temporal cutoff, node and edge schema (column names), artifact
     file names, and a concise construction summary so that downstream training
     scripts can inspect the artifact manifest without re-running the pipeline.
+
+    Also embeds:
+      max_date_submitted   — max date_submitted across filtered submissions,
+                             used by graph_validation.py for temporal compliance.
+      pre_imputation_nulls — per-node-type, per-column null counts before imputation,
+                             used by graph_validation.py for pre-imputation audit.
     """
     nodes = result["nodes"]
     edges = result["edges"]
@@ -75,8 +81,8 @@ def _build_metadata(week: int, window_days: int, result: dict) -> dict:
         "window_days": window_days,
         "temporal_cutoff_rule": (
             "VLE interactions: date <= window_days; "
-            "Assessments: due_date <= window_days (not submission date). "
-            "See docs/LEAKAGE_PREVENTION.md."
+            "Assessments: due_date <= window_days AND date_submitted <= window_days "
+            "(dual guard, Strategy B). See docs/LEAKAGE_PREVENTION.md."
         ),
         "supervised_unit": "enrollment (id_student, code_module, code_presentation)",
         "node_schema": node_schema,
@@ -104,9 +110,15 @@ def _build_metadata(week: int, window_days: int, result: dict) -> dict:
         "label_at_risk_count": int((enrollments["target"] == 1).sum()),
         "label_success_count": int((enrollments["target"] == 0).sum()),
         "label_at_risk_rate": round(float((enrollments["target"] == 1).mean()), 4),
-        "artifacts": {name: str(path.name) for name, path in artifacts.items()},
+        "artifacts": {
+            name: str(path.name)
+            for name, path in artifacts.items()
+            if isinstance(path, Path)
+        },
         "elapsed_seconds": result["elapsed_seconds"],
         "peak_memory_mb": result["peak_memory_mb"],
+        "max_date_submitted": result["max_date_submitted"],
+        "pre_imputation_nulls": result["pre_imputation_nulls"],
     }
 
 

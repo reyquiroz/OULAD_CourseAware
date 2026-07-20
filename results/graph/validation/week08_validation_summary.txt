@@ -2,7 +2,7 @@
   OULAD Graph Validation Summary — Week 8
 ====================================================================
 
-Construction runtime : 4.9 s  |  Peak memory : 1048.5 MB
+Construction runtime : 5.19 s  |  Peak memory : 1049.5 MB
 
 ── Node counts ──────────────────────────────────────────────────
   student                       28,785
@@ -31,11 +31,13 @@ Construction runtime : 4.9 s  |  Peak memory : 1048.5 MB
   interacted_with           src=0  dst=0
   All edge endpoints resolve to known nodes. ✓
 
-── Data quality — pre-imputation audit (from raw source data) ───
-  nodes_student                  total=     0
+── Data quality — pre-imputation audit (from pipeline metadata) ──
+  nodes_student                  total=   971  [expected, resolved by imputation]
+    columns: imd_band: 971
   nodes_course_presentation      total=     0
   nodes_assessment               total=     0
-  nodes_vle_resource             total=     0
+  nodes_vle_resource             total= 10486  [expected, resolved by imputation]
+    columns: week_from: 5243, week_to: 5243
   edges_enrolled_in              total=     0
   edges_contains_assess          total=     0
   edges_has_resource             total=     0
@@ -88,6 +90,7 @@ Construction runtime : 4.9 s  |  Peak memory : 1048.5 MB
   [✓] interacted_with_max_first_day                 value=56 (threshold=56)
   [✓] assessment_max_due_date                       value=54 (threshold=56)
   [✓] interacted_with_min_total_clicks              value=1 (threshold=n/a)
+  [✓] submitted_max_date_submitted                  value=56 (threshold=56)
   [✓] submitted_score_range                         min=0.0 max=100.0
   Overall temporal compliance: ✓
 

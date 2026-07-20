@@ -8,7 +8,7 @@
 
 ## Key Changes vs. Previous Run
 
-1. **Assessment filtering corrected** — `filter_window()` now filters on `assessments.date` (due date) ≤ window, not `date_submitted`. Consistent with `docs/LEAKAGE_PREVENTION.md`.
+1. **Assessment filtering corrected** — `filter_window()` now applies a dual guard (Strategy B): `assessments.date` (due date) ≤ window **AND** `date_submitted` ≤ window. Both conditions are required to exclude scores that were not yet observable at prediction time.
 2. **Explicit null imputation** — `build_node_tables()` fills numeric nulls → 0 and categorical nulls → `"Unknown"` before returning node tables. Pre-imputation null counts are logged for audit.
 3. **Data path fixed** — `config.py` `DATA_DIR` corrected from `DATA/raw` to `data/raw` (case-sensitive).
 4. **Python environment** — switched from Homebrew Python 3.14 to **pyenv Python 3.11.11**; `pyarrow`, `torch 2.12.1`, and `torch-geometric 2.8.0` installed.
@@ -54,6 +54,7 @@
 |---|---|---|
 | Max VLE interaction date | 56 | ✓ |
 | Max assessment due date | 54 | ✓ |
+| Max date_submitted | 56 | ✓ |
 | Submitted score range | 0.0–100.0 | ✓ |
 
 ## Null Handling (pre-imputation, expected from raw data)

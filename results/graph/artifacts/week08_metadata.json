@@ -1,7 +1,7 @@
 {
   "week": 8,
   "window_days": 56,
-  "temporal_cutoff_rule": "VLE interactions: date <= window_days; Assessments: due_date <= window_days (not submission date). See docs/LEAKAGE_PREVENTION.md.",
+  "temporal_cutoff_rule": "VLE interactions: date <= window_days; Assessments: due_date <= window_days AND date_submitted <= window_days (dual guard, Strategy B). See docs/LEAKAGE_PREVENTION.md.",
   "supervised_unit": "enrollment (id_student, code_module, code_presentation)",
   "node_schema": {
     "student": [
@@ -44,7 +44,9 @@
   "edge_schema": {
     "enrolled_in": [
       "src",
-      "dst"
+      "dst",
+      "num_of_prev_attempts",
+      "studied_credits"
     ],
     "contains_assess": [
       "src",
@@ -102,6 +104,16 @@
     "edges_interacted_with": "week08_edges_interacted_with.parquet",
     "enrollments": "week08_enrollments.parquet"
   },
-  "elapsed_seconds": 4.9,
-  "peak_memory_mb": 1048.5
+  "elapsed_seconds": 5.19,
+  "peak_memory_mb": 1049.5,
+  "max_date_submitted": 56,
+  "pre_imputation_nulls": {
+    "student": {
+      "imd_band": 971
+    },
+    "vle_resource": {
+      "week_from": 5243,
+      "week_to": 5243
+    }
+  }
 }

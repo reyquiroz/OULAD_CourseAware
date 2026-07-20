@@ -56,6 +56,9 @@ OULAD/
 │   └── graph/
 │       ├── artifacts/               # Graph PNGs + metadata JSON (parquet/csv gitignored)
 │       └── validation/              # week08_validation_summary.txt + JSON reports
+│   └── comparison/
+│       ├── all_splits_comparison.csv              # Unified 4W×5M×3S table
+│       └── strategy_a_vs_b_comparison.csv         # Strategy A vs B (run separately)
 ├── docs/
 │   ├── validation_report_week8.md   # Week 8 graph audit trail
 │   ├── LEAKAGE_PREVENTION.md
@@ -109,7 +112,7 @@ Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/g
 ### Approach
 
 - **Supervised unit**: enrollment `(id_student, code_module, code_presentation)`
-- **Assessment filtering**: `assessments.date ≤ window` (due date, not submission date — prevents leakage)
+- **Assessment filtering**: Dual guard (Strategy B) — `assessments.date ≤ window` (due date) **and** `date_submitted ≤ window` (submission date). Both guards prevent temporal leakage; 28.8% of OULAD submissions are submitted after their due date.
 - **Student split**: `GroupKFold` on `id_student` — same student cannot appear in both train and test
 - **5 models × 4 feature subsets × 4 temporal windows**
 
@@ -151,7 +154,7 @@ Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/g
 
 | Type | Count | Features |
 |---|---|---|
-| `student` | 28,785 | gender, region, education, imd_band, age_band, prev_attempts, credits, disability |
+| `student` | 28,785 | gender, region, education, imd_band, age_band, disability |
 | `course_presentation` | 22 | module, presentation, length |
 | `assessment` | 40 | type (TMA/CMA/Exam), weight, due_date |
 | `vle_resource` | 6,364 | activity_type, week_from, week_to |
@@ -160,7 +163,7 @@ Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/g
 
 | Type | Count | Features |
 |---|---|---|
-| `enrolled_in` | 32,593 | — |
+| `enrolled_in` | 32,593 | num_of_prev_attempts, studied_credits |
 | `contains_assess` | 40 | — |
 | `has_resource` | 6,364 | — |
 | `submitted` | 47,259 | score |
@@ -215,12 +218,13 @@ pytest tests/test_splits.py -v   # 13/13 passing
 
 | Decision | Rule |
 |---|---|
-| Assessment temporal filter | `assessments.date ≤ window` (due date), **not** `date_submitted` |
+| Assessment temporal filter | Dual guard (Strategy B): `assessments.date ≤ window` (due date) **AND** `date_submitted ≤ window` — both required to exclude unobservable scores |
 | Null imputation | Numeric → `0`, categorical → `"Unknown"` (consistent across tabular + graph) |
 | Supervised unit | Enrollment `(id_student, code_module, code_presentation)` — not student node |
 | Student overlap | Guaranteed zero overlap between train and test via `random_student_split` |
 | Metrics positive class | At-risk (`target=1`) throughout — Precision, Recall, F1, AUPRC all refer to class 1 |
 | Python version | 3.11.11 via pyenv (PyTorch-compatible; pinned in `.python-version`) |
+| Std convention | Population std (ddof=0) throughout all comparison CSVs and summary tables |
 
 ---
 

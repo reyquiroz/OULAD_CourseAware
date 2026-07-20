@@ -80,26 +80,35 @@ def filter_window(vle, assess, assessments, window):
 
 **Leakage Risk**: VERY HIGH - Assessments have due dates throughout the course
 
-**Prevention**:
-- Merge assessment submissions with assessment metadata to get dates
-- Filter by assessment due date: `assess[assess["date"] <= window]`
-- Only include assessments due before the prediction window
-- Exclude late submissions that occurred after the window
+**Prevention** (Strategy B — dual guard):
+- Merge assessment submissions with assessment metadata to get due dates
+- **Guard 1 — Due-date guard**: `assess[assess["date"] <= window]`
+  — an assessment whose due date falls after the cutoff is not yet "available"
+- **Guard 2 — Submission-date guard**: `assess[assess["date_submitted"] <= window]`
+  — even if a due date is within the window, a score submitted *after* the cutoff
+  would not be observable at prediction time. In OULAD, 28.8% of submissions carry
+  a `date_submitted` greater than their due date (late extensions, grace periods).
+  `date_submitted` has no null values in OULAD (all 173,912 rows populated).
 
-**Code Implementation**:
+**Code Implementation** (both guards applied):
 ```python
 def filter_window(vle, assess, assessments, window):
-    # Merge to get assessment dates
+    # Merge to get assessment due dates
     assess = assess.merge(
         assessments[["id_assessment", "code_module", "code_presentation", "date"]],
         on="id_assessment",
         how="left",
     )
-    assess_w = assess[assess["date"] <= window]  # Only past assessments
+    # Guard 1: assessment must have been due by the prediction cutoff
+    assess_w = assess[assess["date"] <= window]
+    # Guard 2: submission must have occurred by the prediction cutoff
+    assess_w = assess_w[assess_w["date_submitted"] <= window]
     return vle_w, assess_w
 ```
 
-**Critical Note**: We use the assessment **due date**, not submission date, to determine availability. This ensures we only use assessments that students would have encountered by the prediction window.
+**Note**: Both guards are required for strict leakage-free assessment filtering.
+Empirical impact of adding Guard 2 (LightGBM, 5-fold CV): AUROC delta ≤ ±0.0024
+across all windows — negligible, but scientifically necessary.
 
 ### 4. Demographic Features (No Leakage)
 
@@ -205,30 +214,32 @@ Expected pattern (validates no leakage):
 ```python
 def filter_window(vle, assess, assessments, window):
     """
-    Filter data up to specified day (leakage-safe)
-    
+    Filter data up to specified day (leakage-safe, Strategy B dual guard)
+
     Args:
         vle: Student VLE activity data
         assess: Student assessment submissions
         assessments: Assessment metadata with dates
         window: Prediction window in days
-    
+
     Returns:
         Filtered VLE and assessment data
     """
     # Filter VLE by activity date
     vle_w = vle[vle["date"] <= window]
-    
-    # Merge assessments with dates
+
+    # Merge assessments with due dates
     assess = assess.merge(
         assessments[["id_assessment", "code_module", "code_presentation", "date"]],
         on="id_assessment",
         how="left",
     )
-    
-    # Filter assessments by due date
+
+    # Guard 1: assessment must have been due by the prediction cutoff
     assess_w = assess[assess["date"] <= window]
-    
+    # Guard 2: submission must have occurred by the prediction cutoff
+    assess_w = assess_w[assess_w["date_submitted"] <= window]
+
     return vle_w, assess_w
 ```
 
@@ -261,7 +272,9 @@ def build_features(vle_w, assess_w, student_info):
 ## Best Practices
 
 1. **Always filter before aggregating**: Apply temporal filters before computing features
-2. **Use due dates, not submission dates**: For assessments, use when they were due, not when submitted
+2. **Use both due date AND submission date** (Strategy B): For assessments, apply
+   `due_date <= window` first, then `date_submitted <= window`. Both guards are
+   required to exclude scores that were not yet observable at prediction time.
 3. **Explicit exclusions**: Always explicitly drop target and identifier columns
 4. **Validate temporally**: Check that performance improves with more data
 5. **Document assumptions**: Clearly state what information is available at each window

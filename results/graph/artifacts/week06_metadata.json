@@ -1,0 +1,119 @@
+{
+  "week": 6,
+  "window_days": 42,
+  "temporal_cutoff_rule": "VLE interactions: date <= window_days; Assessments: due_date <= window_days AND date_submitted <= window_days (dual guard, Strategy B). See docs/LEAKAGE_PREVENTION.md.",
+  "supervised_unit": "enrollment (id_student, code_module, code_presentation)",
+  "node_schema": {
+    "student": [
+      "id_student",
+      "gender",
+      "region",
+      "highest_education",
+      "imd_band",
+      "age_band",
+      "num_of_prev_attempts",
+      "studied_credits",
+      "disability",
+      "node_idx"
+    ],
+    "course_presentation": [
+      "code_module",
+      "code_presentation",
+      "module_presentation_length",
+      "node_idx"
+    ],
+    "assessment": [
+      "id_assessment",
+      "code_module",
+      "code_presentation",
+      "assessment_type",
+      "weight",
+      "date",
+      "node_idx"
+    ],
+    "vle_resource": [
+      "id_site",
+      "code_module",
+      "code_presentation",
+      "activity_type",
+      "week_from",
+      "week_to",
+      "node_idx"
+    ]
+  },
+  "edge_schema": {
+    "enrolled_in": [
+      "src",
+      "dst",
+      "num_of_prev_attempts",
+      "studied_credits"
+    ],
+    "contains_assess": [
+      "src",
+      "dst"
+    ],
+    "has_resource": [
+      "src",
+      "dst"
+    ],
+    "submitted": [
+      "src",
+      "dst",
+      "score"
+    ],
+    "interacted_with": [
+      "src",
+      "dst",
+      "total_clicks",
+      "n_interactions",
+      "first_day",
+      "last_day",
+      "active_days"
+    ],
+    "_notes": {
+      "interacted_with": "Aggregated from raw interaction records grouped by (id_student, id_site, code_module, code_presentation) before edge construction; the saved edge table stores student-node to resource-node pairs with aggregate features total_clicks / n_interactions / first_day / last_day / active_days.",
+      "submitted": "Enrollment-scoped: matched on (id_student, code_module, code_presentation). score=0 where raw score is null."
+    }
+  },
+  "node_counts": {
+    "student": 28785,
+    "course_presentation": 22,
+    "assessment": 24,
+    "vle_resource": 6364
+  },
+  "edge_counts": {
+    "enrolled_in": 32593,
+    "contains_assess": 24,
+    "has_resource": 6364,
+    "submitted": 28569,
+    "interacted_with": 952241
+  },
+  "enrollment_count": 32593,
+  "label_at_risk_count": 17208,
+  "label_success_count": 15385,
+  "label_at_risk_rate": 0.528,
+  "artifacts": {
+    "nodes_student": "week06_nodes_student.parquet",
+    "nodes_course_presentation": "week06_nodes_course_presentation.parquet",
+    "nodes_assessment": "week06_nodes_assessment.parquet",
+    "nodes_vle_resource": "week06_nodes_vle_resource.parquet",
+    "edges_enrolled_in": "week06_edges_enrolled_in.parquet",
+    "edges_contains_assess": "week06_edges_contains_assess.parquet",
+    "edges_has_resource": "week06_edges_has_resource.parquet",
+    "edges_submitted": "week06_edges_submitted.parquet",
+    "edges_interacted_with": "week06_edges_interacted_with.parquet",
+    "enrollments": "week06_enrollments.parquet"
+  },
+  "elapsed_seconds": 4.88,
+  "peak_memory_mb": 915.5,
+  "max_date_submitted": 42,
+  "pre_imputation_nulls": {
+    "student": {
+      "imd_band": 971
+    },
+    "vle_resource": {
+      "week_from": 5243,
+      "week_to": 5243
+    }
+  }
+}

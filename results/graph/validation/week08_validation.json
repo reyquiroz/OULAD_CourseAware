@@ -1,8 +1,8 @@
 {
   "week": 8,
   "runtime": {
-    "elapsed_seconds": 4.9,
-    "peak_memory_mb": 1048.5
+    "elapsed_seconds": 5.19,
+    "peak_memory_mb": 1049.5
   },
   "node_counts": {
     "student": 28785,
@@ -94,6 +94,15 @@
     "enrollments": {
       "total_null_inf": 0,
       "by_column": {}
+    }
+  },
+  "pre_imputation_nulls": {
+    "student": {
+      "imd_band": 971
+    },
+    "vle_resource": {
+      "week_from": 5243,
+      "week_to": 5243
     }
   },
   "label_distribution": {
@@ -260,6 +269,12 @@
         "value": 1,
         "compliant": true,
         "note": "Every aggregated interaction record must have >=1 click."
+      },
+      "submitted_max_date_submitted": {
+        "value": 56,
+        "threshold": 56,
+        "compliant": true,
+        "note": "Guard 2 (Strategy B): max date_submitted in filtered submissions must be <= window_days. Value sourced from metadata JSON."
       },
       "submitted_score_range": {
         "min": 0.0,

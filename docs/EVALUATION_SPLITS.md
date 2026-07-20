@@ -181,6 +181,14 @@ Test presentation: `["2014J"]`
 
 ## Course Difficulty Analysis
 
+> **Two output files are produced** when `analyze_course_difficulty()` is called:
+>
+> | File | Description |
+> |------|-------------|
+> | `results/lcpo/course_presentation_difficulty.csv` | Aggregated: one row per course-presentation, AUROC mean±std across all weeks and models. Use for a quick overall hardness ranking. |
+> | `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: one row per `(Course_Presentation, Week, Model)` — up to 440 rows. Use for per-week or per-model analysis. |
+
+
 LCPO reveals significant variation across course-presentations. AUROC is aggregated across
 all 4 models and 4 prediction windows (16 measurements per course-presentation).
 
@@ -229,7 +237,8 @@ Precision_std, Recall_mean, Recall_std, Balanced_Acc_mean, Balanced_Acc_std`
 | `results/baseline/baseline_results_table.csv` | Random split summary (mean±std) |
 | `results/lcpo/lcpo_results_detailed.csv` | LCPO: all weeks × models × course-presentations |
 | `results/lcpo/random_vs_lcpo_comparison.csv` | Random vs LCPO per model (Week 8) |
-| `results/lcpo/course_presentation_difficulty.csv` | Per-course AUROC mean±std, sorted hardest first |
+| `results/lcpo/course_presentation_difficulty.csv` | Aggregated: per-course AUROC mean±std (all weeks × models), sorted hardest first |
+| `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: AUROC per `(Course_Presentation, Week, Model)` — 440 rows |
 | `results/lcpo/course_difficulty_chart.png` | Boxplot of per-course AUROC distribution |
 | `results/cross_course/future_presentation_results.csv` | Future-presentation: all weeks × models |
 | `results/comparison/all_splits_comparison.csv` | Unified: all weeks × models × all 3 splits |
@@ -257,8 +266,10 @@ All splits use the same shared utilities from `src/oulad_data.py`:
 
 `filter_window(vle, assess, assessments, window)` filters:
 - VLE interactions: `date <= window`
-- Assessments: `assessments.date` (due date) `<= window` — **not submission date**, which
-  would leak future behaviour
+- Assessments — dual guard (Strategy B):
+  - Guard 1: `assessments.date` (due date) `<= window`
+  - Guard 2: `date_submitted <= window` — 28.8% of OULAD submissions are submitted
+    after their due date; Guard 2 removes these to prevent future leakage
 
 ### Feature Engineering
 

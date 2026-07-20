@@ -17,8 +17,8 @@ Design principles (from docs/GRAPH_IMPLEMENTATION_EXECUTION_PLAN.md):
   the graph artifact itself carries no train/val/test masks.
 * Temporal filtering reuses oulad_data.filter_window(), which gates
   VLE interactions on interaction date and assessment submissions on
-  assessment *due date* (not submission date) — consistent with
-  docs/LEAKAGE_PREVENTION.md and the tabular baseline.
+  assessment *due date* AND *submission date* (dual guard, Strategy B)
+  — consistent with docs/LEAKAGE_PREVENTION.md and the tabular baseline.
 * All on-disk outputs land under results/graph/ sub-directories that are
   declared in config.py.
 
@@ -91,7 +91,7 @@ def apply_window_cutoff(
 
     VLE interactions: date <= window_days
     Assessment submissions: assessment due date <= window_days
-        (availability is driven by due date, not submission date)
+        (availability is driven by due date AND submission date — dual guard, Strategy B)
 
     Args:
         raw:         Dict produced by load_raw_tables().
@@ -187,7 +187,8 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     # Explicit null imputation — must happen before tensors are built.
     # Strategy mirrors oulad_data.build_features(): numeric → 0,
     # categorical → "Unknown".  node_idx is excluded (always integer).
-    # Pre-imputation null counts are printed for audit transparency.
+    # Pre-imputation null counts are collected per-column and returned
+    # so they can be persisted in the metadata JSON for audit purposes.
     #
     # Expected null sources (from raw OULAD source data — not bugs):
     #
@@ -206,6 +207,7 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     # All other node and edge tables have zero pre-imputation nulls.
     # The post-imputation assertion below confirms zero nulls after fill.
     # ------------------------------------------------------------------
+    pre_imputation_nulls: Dict[str, Dict[str, int]] = {}
     for ntype, ndf in nodes.items():
         feat_cols = [c for c in ndf.columns if c != "node_idx"]
         pre_nulls = ndf[feat_cols].isnull().sum()
@@ -215,6 +217,10 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
                 f"  [impute] {ntype}: {pre_total} null(s) before imputation — "
                 + ", ".join(f"{c}={n}" for c, n in pre_nulls.items() if n > 0)
             )
+            # Record per-column counts (non-zero only) for metadata JSON
+            pre_imputation_nulls[ntype] = {
+                c: int(n) for c, n in pre_nulls.items() if n > 0
+            }
         num_cols = ndf[feat_cols].select_dtypes(include=[np.number]).columns
         cat_cols = pd.Index([c for c in feat_cols if c not in num_cols])
         ndf[num_cols] = ndf[num_cols].fillna(0)
@@ -224,7 +230,7 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
             f"Unexpected nulls in {ntype} after imputation: {post_nulls}"
         )
 
-    return nodes
+    return nodes, pre_imputation_nulls
 
 
 # ---------------------------------------------------------------------------
@@ -268,15 +274,21 @@ def build_edge_tables(
     vle_idx = nodes["vle_resource"].set_index("id_site")["node_idx"]
 
     # ── enrolled_in: student -> course_presentation ────────────────────────
+    # Carries num_of_prev_attempts and studied_credits as enrollment-scoped
+    # edge attributes (values differ per course, so they cannot live on the
+    # student node without losing information for multi-course students).
     ei = filtered["student_info"][
-        ["id_student", "code_module", "code_presentation"]
+        ["id_student", "code_module", "code_presentation",
+         "num_of_prev_attempts", "studied_credits"]
     ].copy()
     ei["cp_key"] = ei["code_module"] + "_" + ei["code_presentation"]
     ei["src"] = ei["id_student"].map(stu_idx)
     ei["dst"] = ei["cp_key"].map(cp_idx)
     ei = ei.dropna(subset=["src", "dst"])
     ei[["src", "dst"]] = ei[["src", "dst"]].astype(int)
-    edges["enrolled_in"] = ei[["src", "dst"]].copy()
+    edges["enrolled_in"] = ei[
+        ["src", "dst", "num_of_prev_attempts", "studied_credits"]
+    ].copy()
 
     # ── contains_assess: course_presentation -> assessment ─────────────────
     ca = nodes["assessment"][
@@ -301,6 +313,10 @@ def build_edge_tables(
     edges["has_resource"] = hr[["src", "dst"]].copy()
 
     # ── submitted: student -> assessment (enrollment-scoped) ───────────────
+    # Record max_date_submitted before dropping the column — used by the
+    # validation report to confirm Guard 2 (submission-date guard) was respected.
+    max_date_submitted = int(filtered["student_assess"]["date_submitted"].max())
+
     sub = filtered["student_assess"][
         ["id_student", "id_assessment", "score", "code_module", "code_presentation"]
     ].copy()
@@ -339,7 +355,7 @@ def build_edge_tables(
                       "first_day", "last_day", "active_days"]
     edges["interacted_with"] = agg[edge_attr_cols].copy()
 
-    return edges
+    return edges, max_date_submitted
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +485,7 @@ def materialize_graph_artifacts(
     enrollments: pd.DataFrame,
     week: int,
     save_dir: Path = None,
+    extra_metadata: dict = None,
 ) -> Dict[str, Path]:
     """
     Persist graph node tables, edge tables, and the enrollment supervision
@@ -478,15 +495,20 @@ def materialize_graph_artifacts(
     validation runs do not depend on notebook state.
 
     Args:
-        nodes:       Dict from build_node_tables().
-        edges:       Dict from build_edge_tables().
-        enrollments: DataFrame from build_enrollment_supervision().
-        week:        Prediction week (e.g. 8); used in file names.
-        save_dir:    Destination directory.  Defaults to
-                     config.GRAPH_ARTIFACTS_DIR.
+        nodes:          Dict from build_node_tables().
+        edges:          Dict from build_edge_tables().
+        enrollments:    DataFrame from build_enrollment_supervision().
+        week:           Prediction week (e.g. 8); used in file names.
+        save_dir:       Destination directory.  Defaults to
+                        config.GRAPH_ARTIFACTS_DIR.
+        extra_metadata: Optional dict of additional key/value pairs to
+                        return alongside the artifact paths.  Used by
+                        run_graph_pipeline.py to embed max_date_submitted
+                        and pre_imputation_nulls into the metadata JSON.
 
     Returns:
-        Dict mapping artifact name -> Path of the saved file.
+        Dict mapping artifact name -> Path of the saved file, merged with
+        any extra_metadata entries.
     """
     if save_dir is None:
         save_dir = GRAPH_ARTIFACTS_DIR
@@ -526,6 +548,9 @@ def materialize_graph_artifacts(
     for name, path in saved.items():
         print(f"  {name}: {path.name}")
 
+    if extra_metadata:
+        saved.update(extra_metadata)
+
     return saved
 
 
@@ -544,7 +569,8 @@ def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, objec
 
     Returns:
         Dict with keys: raw, filtered, nodes, edges, enrollments,
-                        integrity, artifacts, elapsed_seconds, peak_memory_mb.
+                        integrity, artifacts, elapsed_seconds, peak_memory_mb,
+                        max_date_submitted, pre_imputation_nulls.
     """
     window_days = PREDICTION_WINDOWS.get(f"week_{week}", week * 7)
 
@@ -553,12 +579,19 @@ def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, objec
 
     raw = load_raw_tables(data_dir)
     filtered = apply_window_cutoff(raw, window_days)
-    nodes = build_node_tables(filtered)
-    edges = build_edge_tables(filtered, nodes)
+    nodes, pre_imputation_nulls = build_node_tables(filtered)
+    edges, max_date_submitted = build_edge_tables(filtered, nodes)
     enrollments = build_enrollment_supervision(filtered)
     integrity = validate_graph_integrity(nodes, edges, enrollments)
-    artifacts = materialize_graph_artifacts(nodes, edges, enrollments,
-                                            week=week, save_dir=save_dir)
+    extra_metadata = {
+        "max_date_submitted": max_date_submitted,
+        "pre_imputation_nulls": pre_imputation_nulls,
+    }
+    artifacts = materialize_graph_artifacts(
+        nodes, edges, enrollments,
+        week=week, save_dir=save_dir,
+        extra_metadata=extra_metadata,
+    )
 
     elapsed = time.perf_counter() - t0
     _, peak_bytes = tracemalloc.get_traced_memory()
@@ -577,4 +610,6 @@ def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, objec
         "artifacts": artifacts,
         "elapsed_seconds": round(elapsed, 2),
         "peak_memory_mb": peak_mb,
+        "max_date_submitted": max_date_submitted,
+        "pre_imputation_nulls": pre_imputation_nulls,
     }
