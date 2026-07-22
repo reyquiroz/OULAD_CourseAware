@@ -14,7 +14,7 @@ changes, no model training.
 
 ## Sub-Task 1 — Remove unrelated data file and audit repository for PII
 
-**Status**: `[ ] pending`
+**Status**: `[x] done` *(history rewritten and local commits ready; force-push pending Reynaldo re-authenticating GitHub token — see Step 6 below)*
 
 ### Intent
 
@@ -43,7 +43,11 @@ updated to prevent recurrence.
 3. **Remove from working tree** — delete the file if `filter-repo` left it staged or unstaged.
 4. **Audit the repository** — scan for any other non-OULAD CSV/Excel/text files in `data/`, `src/`, `notebooks/`, and the root directory; check `img_1782516990144.png` and any other image files for PII.
 5. **Update `.gitignore`** — add a rule (e.g., `data/Completion*.csv` or `data/*Report*.csv`) to block similar files in the future. Add a comment explaining the OULAD-only policy for the `data/` directory.
-6. **Force-push** the rewritten history to the remote (after confirming with Reynaldo that a force-push is acceptable and that collaborators have been notified).
+6. **Force-push** the rewritten history to the remote. The local history is rewritten and two new commits are ready. Run `gh auth login` to refresh the expired GitHub token for `reyquiroz`, then:
+   ```bash
+   git push origin main --force
+   git push lab main --force   # BioAI-Systems-Lab/CourseAware mirror
+   ```
 
 ### Relevant Context
 
