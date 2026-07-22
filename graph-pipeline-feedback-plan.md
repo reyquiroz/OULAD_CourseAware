@@ -60,7 +60,7 @@ updated to prevent recurrence.
 
 ## Sub-Task 2 — Correct enrollment-feature representation on the student node
 
-**Status**: `[ ] pending`
+**Status**: `[x] done`
 
 ### Intent
 
