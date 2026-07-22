@@ -45,9 +45,9 @@ Column lists sourced from `week08_metadata.json` → `node_schema`.
 
 ### 1. `student`
 
-**Source**: `studentInfo.csv`  
-**Count** (Week 8): 28,785 unique students  
-**Primary key**: `id_student`  
+**Source**: `studentInfo.csv`
+**Count** (Week 8): 28,785 unique students
+**Primary key**: `id_student`
 **File**: `week{N}_nodes_student.parquet`
 
 | Column | Type | Source | Null handling |
@@ -57,13 +57,15 @@ Column lists sourced from `week08_metadata.json` → `node_schema`.
 | `region` | str | studentInfo | imputed → `"Unknown"` |
 | `highest_education` | str | studentInfo | imputed → `"Unknown"` |
 | `imd_band` | str | studentInfo | **~971 nulls** (geocoding failures) → imputed to `"Unknown"` |
-| `age_band` | str | studentInfo | imputed → `"Unknown"` |
 | `disability` | str | studentInfo | imputed → `"Unknown"` |
 | `node_idx` | int | pipeline | 0-based integer index used as src/dst in edge tables |
 
-> **Note**: `num_of_prev_attempts` and `studied_credits` are enrollment-scoped
-> (a student can have different values across courses) and are stored as attributes
-> on the `enrolled_in` edge, not here.
+> **Enrollment-scoped attributes removed from student node**: `age_band`,
+> `num_of_prev_attempts`, and `studied_credits` are not stored here.
+> Empirical audit of `studentInfo.csv` confirmed that all three vary across
+> a student's course enrollments (72, 1,403, and 1,149 students respectively
+> have >1 distinct value). They are stored on the `enrolled_in` edge where each
+> row corresponds to one specific enrollment.
 
 **Target label**: stored in `week{N}_enrollments.parquet`, not in this table.
 
@@ -140,21 +142,23 @@ from the corresponding node tables.
 
 ### 1. `enrolled_in` — student → course_presentation
 
-**Source**: `studentInfo.csv`  
-**Count**: 32,593 (one per unique enrollment)  
+**Source**: `studentInfo.csv`
+**Count**: 32,593 (one per unique enrollment)
 **File**: `week{N}_edges_enrolled_in.parquet`
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `src` | int | Student `node_idx` |
 | `dst` | int | Course-presentation `node_idx` |
+| `age_band` | str | Student's age band at enrollment time (e.g. `"0-35"`, `"35-55"`, `"55≤"`) |
 | `num_of_prev_attempts` | int | Number of times this student previously attempted this course |
 | `studied_credits` | int | Total credits the student was studying at enrollment time |
 
-> `num_of_prev_attempts` and `studied_credits` are enrollment-scoped attributes.
-> They vary per (student, course, presentation) and are therefore attached to
-> this edge rather than the student node to preserve per-enrollment accuracy for
-> multi-course students.
+> All three attributes are enrollment-scoped: they can differ per
+> (student, course, presentation) and are therefore stored on this edge, not
+> on the student node. Empirical audit of `studentInfo.csv` confirmed:
+> `age_band` varies for 72 students, `num_of_prev_attempts` for 1,403,
+> and `studied_credits` for 1,149 across their respective enrollments.
 
 ---
 

@@ -141,15 +141,22 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     nodes: Dict[str, pd.DataFrame] = {}
 
     # --- student nodes ---
+    # Only truly stable, student-level attributes belong here.
+    # Empirical audit of studentInfo.csv confirmed:
+    #   - gender, region, highest_education, imd_band, disability:
+    #       0 students have >1 distinct value across enrollments → stable ✓
+    #   - age_band: 72 students have >1 distinct value → enrollment-scoped,
+    #       moved to enrolled_in edge
+    #   - num_of_prev_attempts: 1,403 students vary → enrollment-scoped,
+    #       already on enrolled_in edge (removed from here)
+    #   - studied_credits: 1,149 students vary → enrollment-scoped,
+    #       already on enrolled_in edge (removed from here)
     student_cols = [
         "id_student",
         "gender",
         "region",
         "highest_education",
         "imd_band",
-        "age_band",
-        "num_of_prev_attempts",
-        "studied_credits",
         "disability",
     ]
     s = filtered["student_info"][student_cols].drop_duplicates("id_student").copy()
@@ -274,12 +281,16 @@ def build_edge_tables(
     vle_idx = nodes["vle_resource"].set_index("id_site")["node_idx"]
 
     # ── enrolled_in: student -> course_presentation ────────────────────────
-    # Carries num_of_prev_attempts and studied_credits as enrollment-scoped
-    # edge attributes (values differ per course, so they cannot live on the
-    # student node without losing information for multi-course students).
+    # Carries all enrollment-scoped attributes — values that differ per
+    # (student, course, presentation) and therefore cannot live on the
+    # student node without silently discarding variation for multi-course
+    # students.  Empirical audit (see build_node_tables comments):
+    #   age_band:             72 students vary  → enrollment-scoped
+    #   num_of_prev_attempts: 1,403 students vary → enrollment-scoped
+    #   studied_credits:      1,149 students vary → enrollment-scoped
     ei = filtered["student_info"][
         ["id_student", "code_module", "code_presentation",
-         "num_of_prev_attempts", "studied_credits"]
+         "age_band", "num_of_prev_attempts", "studied_credits"]
     ].copy()
     ei["cp_key"] = ei["code_module"] + "_" + ei["code_presentation"]
     ei["src"] = ei["id_student"].map(stu_idx)
@@ -287,7 +298,7 @@ def build_edge_tables(
     ei = ei.dropna(subset=["src", "dst"])
     ei[["src", "dst"]] = ei[["src", "dst"]].astype(int)
     edges["enrolled_in"] = ei[
-        ["src", "dst", "num_of_prev_attempts", "studied_credits"]
+        ["src", "dst", "age_band", "num_of_prev_attempts", "studied_credits"]
     ].copy()
 
     # ── contains_assess: course_presentation -> assessment ─────────────────

@@ -10,9 +10,6 @@
       "region",
       "highest_education",
       "imd_band",
-      "age_band",
-      "num_of_prev_attempts",
-      "studied_credits",
       "disability",
       "node_idx"
     ],
@@ -45,6 +42,7 @@
     "enrolled_in": [
       "src",
       "dst",
+      "age_band",
       "num_of_prev_attempts",
       "studied_credits"
     ],
@@ -104,7 +102,7 @@
     "edges_interacted_with": "week06_edges_interacted_with.parquet",
     "enrollments": "week06_enrollments.parquet"
   },
-  "elapsed_seconds": 4.88,
+  "elapsed_seconds": 6.28,
   "peak_memory_mb": 915.5,
   "max_date_submitted": 42,
   "pre_imputation_nulls": {

@@ -215,26 +215,29 @@ class GraphConstructor:
         node_features = {}
 
         # 1. Student node features
+        # TODO (next iteration): load student features from the graph parquet
+        #   artifacts (week{N}_nodes_student.parquet) rather than directly from
+        #   studentInfo.csv.  The canonical student node contains only stable
+        #   attributes: gender, region, highest_education, imd_band, disability.
+        #   age_band, num_of_prev_attempts, and studied_credits are
+        #   enrollment-scoped and live on the enrolled_in edge — do not add them
+        #   to the student node feature matrix.
         student_df = data["student_info"].copy()
 
-        # Demographic features (one-hot encoded)
+        # Demographic features (one-hot encoded) — stable per student
         categorical_cols = [
             "gender",
             "region",
             "highest_education",
             "imd_band",
-            "age_band",
             "disability",
         ]
         student_encoded = pd.get_dummies(student_df[categorical_cols], drop_first=True)
 
-        # Numeric features
-        numeric_features = student_df[
-            ["num_of_prev_attempts", "studied_credits"]
-        ].fillna(0)
-
-        # Combine
-        student_features = pd.concat([student_encoded, numeric_features], axis=1)
+        # NOTE: age_band, num_of_prev_attempts, studied_credits are
+        # enrollment-scoped (vary across a student's courses) and are stored on
+        # the enrolled_in edge, not the student node.  They are excluded here.
+        student_features = student_encoded.copy()
         node_features["student"] = torch.FloatTensor(student_features.values)
 
         # 2. Course node features

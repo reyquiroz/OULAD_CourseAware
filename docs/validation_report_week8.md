@@ -12,6 +12,7 @@
 2. **Explicit null imputation** — `build_node_tables()` fills numeric nulls → 0 and categorical nulls → `"Unknown"` before returning node tables. Pre-imputation null counts are logged for audit.
 3. **Data path fixed** — `config.py` `DATA_DIR` corrected from `DATA/raw` to `data/raw` (case-sensitive).
 4. **Python environment** — switched from Homebrew Python 3.14 to **pyenv Python 3.11.11**; `pyarrow`, `torch 2.12.1`, and `torch-geometric 2.8.0` installed.
+5. **Enrollment-feature schema corrected** — empirical audit of `studentInfo.csv` confirmed that `age_band` (72 students), `num_of_prev_attempts` (1,403 students), and `studied_credits` (1,149 students) all vary across a student's enrollments. All three are now stored exclusively on the `enrolled_in` edge; none appear on the student node. This also corrects the stale `submitted` edge count (was 47,259 under Strategy A; correct dual-filter count is 44,927).
 
 ## Node Counts
 
@@ -29,7 +30,7 @@
 | enrolled_in | 32,593 |
 | contains_assess | 40 |
 | has_resource | 6,364 |
-| submitted | 47,259 |
+| submitted | 44,927 |
 | interacted_with | 1,056,217 |
 
 ## Enrollment Supervision
@@ -67,8 +68,8 @@
 
 ## Performance
 
-- Runtime: **6.6 s**
-- Peak memory: **1,048.7 MB**
+- Runtime: **5.2 s**
+- Peak memory: **1,049.5 MB**
 
 ## Artifacts
 
