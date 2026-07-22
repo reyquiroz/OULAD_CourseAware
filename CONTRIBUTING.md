@@ -238,6 +238,32 @@ Before submitting a PR, verify:
 3. **Approval**: Once approved, maintainer will merge
 4. **Celebrate**: Your contribution is now part of the project! 🎉
 
+
+## Data Directory Policy
+
+The `data/` directory must contain only the seven canonical OULAD dataset files:
+
+| File | Source |
+|------|--------|
+| `assessments.csv` | Open University Learning Analytics Dataset |
+| `courses.csv` | Open University Learning Analytics Dataset |
+| `studentAssessment.csv` | Open University Learning Analytics Dataset |
+| `studentInfo.csv` | Open University Learning Analytics Dataset |
+| `studentRegistration.csv` | Open University Learning Analytics Dataset |
+| `studentVle.csv` | Open University Learning Analytics Dataset (433 MB — gitignored; download separately) |
+| `vle.csv` | Open University Learning Analytics Dataset |
+
+**Do not commit** any of the following to `data/` or anywhere in the repository:
+
+- Employer-generated exports (e.g. IBM learning platform completion reports)
+- Files containing personally identifiable information (names, email addresses, employee IDs)
+- Files unrelated to the OULAD research dataset
+
+`.gitignore` blocks `data/*Completion*.csv` and `data/*Report*.csv` as a safeguard.
+If you need to reference an external file for analysis, keep it outside the repository
+and reference it by absolute path in a local config that is itself gitignored.
+
+
 ## Project-Specific Guidelines
 
 ### Temporal Leakage Prevention

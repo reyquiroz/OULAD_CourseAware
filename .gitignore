@@ -19,13 +19,22 @@ env/
 ENV/
 
 # ── Raw OULAD data — studentVle.csv is 433 MB, hard-blocked by GitHub ─────
-# All other CSVs are tracked (≤ 6 MB each).
-# Download studentVle.csv from: https://analyse.kmi.open.ac.uk/open_dataset
+# Only the seven canonical OULAD CSVs belong in data/:
+#   assessments.csv, courses.csv, studentAssessment.csv, studentInfo.csv,
+#   studentRegistration.csv, studentVle.csv, vle.csv
+# Do NOT add unrelated files (e.g. employer exports, training records,
+# or any file containing personally identifiable information).
 data/studentVle.csv
 data/raw/studentVle.csv
 data/raw/studentVle.csv.zip
 Data/studentVle.csv
 DATA/studentVle.csv
+# Block future Completion/Report exports (IBM learning platform or similar
+# files containing PII that are unrelated to OULAD).
+data/*Completion*.csv
+data/*Report*.csv
+data/raw/*Completion*.csv
+data/raw/*Report*.csv
 
 # ── Graph pipeline — large binary artifacts ───────────────────────────────
 # Regenerate with: python src/run_graph_pipeline.py --week 8
