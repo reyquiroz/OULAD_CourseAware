@@ -154,7 +154,7 @@ Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/g
 
 | Type | Count | Features |
 |---|---|---|
-| `student` | 28,785 | gender, region, education, imd_band, age_band, disability |
+| `student` | 28,785 | gender, region, education, imd_band, disability |
 | `course_presentation` | 22 | module, presentation, length |
 | `assessment` | 40 | type (TMA/CMA/Exam), weight, due_date |
 | `vle_resource` | 6,364 | activity_type, week_from, week_to |
@@ -163,10 +163,10 @@ Outputs: `results/graph/validation/week08_validation_summary.txt` and `results/g
 
 | Type | Count | Features |
 |---|---|---|
-| `enrolled_in` | 32,593 | num_of_prev_attempts, studied_credits |
+| `enrolled_in` | 32,593 | age_band, num_of_prev_attempts, studied_credits |
 | `contains_assess` | 40 | — |
 | `has_resource` | 6,364 | — |
-| `submitted` | 47,259 | score |
+| `submitted` | 44,927 | score |
 | `interacted_with` | 1,056,217 | total_clicks, n_interactions, first_day, last_day, active_days |
 
 ### Pipeline Stages
@@ -181,7 +181,7 @@ load_raw_tables()
   → materialize_graph_artifacts()
 ```
 
-**Week 8 validation**: zero duplicates, zero dangling edges, zero post-imputation nulls, 52.8% at-risk rate, runtime ~6.6 s. Full report: [`docs/validation_report_week8.md`](docs/validation_report_week8.md).
+**Week 8 validation**: zero duplicates, zero dangling edges, zero post-imputation nulls, 52.8% at-risk rate, runtime ~6 s. Full report: [`docs/validation_report_week8.md`](docs/validation_report_week8.md).
 
 ### Split Utilities (`src/oulad_data.py`)
 
@@ -201,7 +201,7 @@ train_mask, test_mask = lcpo_split(enrollments, "BBB", "2013J")
 
 ```bash
 source oulad_env/bin/activate
-pytest tests/test_splits.py -v   # 13/13 passing
+pytest tests/ -v   # 24/24 passing
 ```
 
 ### Canonical Notebook

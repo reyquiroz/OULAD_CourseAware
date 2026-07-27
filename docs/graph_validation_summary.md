@@ -66,10 +66,17 @@ Expected nulls from raw OULAD source data (resolved by imputation):
 
 | Week | Runtime (s) | Peak memory (MB) |
 | --- | --- | --- |
-| 2 | 4.6 | 915.5 |
-| 4 | 4.7 | 915.5 |
-| 6 | 4.9 | 915.5 |
-| 8 | 5.2 | 1049.5 |
+| 2 | 7.1 | 915.5 |
+| 4 | 5.3 | 915.5 |
+| 6 | 6.3 | 915.5 |
+| 8 | 6.1 | 1049.0 |
+
+> **Note**: This summary is generated from `week{N}_metadata.json` and
+> `week{N}_validation_summary.txt` files under `results/graph/`. After any
+> pipeline run, regenerate it with:
+> ```bash
+> python src/summarize_graph_weeks.py
+> ```
 
 ---
 
