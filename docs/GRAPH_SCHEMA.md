@@ -37,6 +37,25 @@ Assessment submissions use a **dual guard (Strategy B)**:
 
 VLE interactions are filtered on the interaction date only.
 
+### Prediction Cutoff Semantics
+
+All day numbers in OULAD source files are already expressed **relative to the
+start of the course presentation** — day 0 is the first day of that
+`(code_module, code_presentation)`. The public OULAD release does not include
+absolute calendar dates for course start; all temporal fields (`date`,
+`date_submitted`, `date_registration`, `date_unregistration`) are integer
+offsets from this implicit day 0.
+
+A prediction window of `W` days therefore means: use only data observable in
+the first `W` days after the course started. A student's records from different
+course presentations are independent because each presentation has its own day-0
+origin — there is no cross-presentation day number that needs alignment.
+
+**Implementation**: `oulad_data.filter_window(vle, assess, assessments,
+window_days)` applies `date ≤ window_days` to VLE rows and the dual guard
+to assessment rows. The window value is passed as an integer; no calendar
+arithmetic is performed.
+
 ## Node Types
 
 Column lists sourced from `week08_metadata.json` → `node_schema`.
@@ -209,9 +228,14 @@ code_presentation)` to prevent activity from one course leaking into another.
 
 **Temporal filtering**: both due-date guard (`date ≤ window_days`) and
 submission-date guard (`date_submitted ≤ window_days`) are applied before
-this edge is built. The `date_submitted` column is dropped from the saved
-artifact; the max value is recorded in `week{N}_metadata.json` →
-`max_date_submitted` for validation.
+this edge is built.
+
+**`date_submitted` is not stored in the artifact.** It is used only as a
+filter predicate (Guard 2). After filtering, the column is dropped before
+writing `week{N}_edges_submitted.parquet`. The maximum observed
+`date_submitted` value (post-filter, must equal `window_days`) is recorded in
+`week{N}_metadata.json` → `max_date_submitted` and verified by the validation
+report to confirm no future submissions slipped through.
 
 ---
 
@@ -231,13 +255,27 @@ artifact; the max value is recorded in `week{N}_metadata.json` →
 | `last_day` | int | Latest interaction day (≤ window_days) |
 | `active_days` | int | Number of distinct days with at least one click |
 
-**Aggregation**: raw `studentVle` rows are grouped by
-`(id_student, id_site, code_module, code_presentation)` to produce one edge
-per student-resource pair per enrollment. This prevents multi-edge explosion
-(a student may interact with the same resource on many days).
+**Aggregation**: raw `studentVle` rows (one per student-day-resource
+interaction) are grouped by the key
+`(id_student, id_site, code_module, code_presentation)` to produce **one edge
+per student–resource pair per enrollment**. This prevents multi-edge
+explosion (a student may interact with the same resource on many days within
+one course presentation).
+
+Column derivations from the raw `studentVle.sum_click` field:
+
+| Column | Derivation |
+|--------|------------|
+| `total_clicks` | `sum(sum_click)` — total clicks across all days |
+| `n_interactions` | `count()` — number of raw interaction records aggregated |
+| `first_day` | `min(date)` — earliest interaction day (≥ 0, ≤ window_days) |
+| `last_day` | `max(date)` — latest interaction day (≤ window_days) |
+| `active_days` | `nunique(date)` — count of distinct days with ≥ 1 click |
 
 **Enrollment-scoped**: the grouping key includes `code_module` and
-`code_presentation` to prevent cross-course activity leakage.
+`code_presentation` to prevent cross-course activity leakage (a student
+enrolled in two courses cannot have their activity in course A counted
+toward course B).
 
 ---
 
@@ -257,8 +295,36 @@ time cutoff.
 | `final_result` | str | Raw outcome: Pass / Distinction / Fail / Withdrawn |
 | `target` | int | Binary label: `1` = at-risk (Fail/Withdrawn), `0` = success (Pass/Distinction) |
 
-**Label distribution** (Week 8): 17,208 at-risk (52.8%), 15,385 success (47.2%).  
+### Label Derivation
+
+The binary target is derived from `studentInfo.final_result`:
+
+| `final_result` value | `target` | Rationale |
+|----------------------|----------|-----------|
+| `Pass` | 0 | Student completed the course successfully |
+| `Distinction` | 0 | Student completed the course with distinction |
+| `Fail` | 1 | Student completed assessments but did not pass |
+| `Withdrawn` | 1 | Student disengaged before completing the course |
+
+**Why Fail and Withdrawn are both `target=1`**: Both outcomes represent a
+student who did not achieve a passing grade — Fail explicitly and Withdrawn
+implicitly (a student who withdraws forfeits the opportunity to pass). From an
+intervention standpoint, both warrant the same early-warning response. This
+is the standard OULAD at-risk definition used in the literature (Kuzilek et
+al., 2017).
+
+**Label distribution** (all weeks — labels are independent of the prediction
+cutoff because `final_result` is a terminal outcome):
+
+| Outcome | Count | Share |
+|---------|-------|-------|
+| At-risk (Fail + Withdrawn) | 17,208 | 52.8% |
+| Success (Pass + Distinction) | 15,385 | 47.2% |
+| **Total enrollments** | **32,593** | **100%** |
+
 Per-course at-risk rate ranges from 27.4 % (AAA/2013J) to 65.8 % (CCC/2014B).
+All reported Precision, Recall, F1, and AUPRC refer to the at-risk class
+(class 1).
 
 ---
 
@@ -344,27 +410,40 @@ python src/run_graph_pipeline.py --week 8
 
 ---
 
+## Excluded Source Columns
+
+### `studentRegistration.csv` — registration dates
+
+The `studentRegistration.csv` file contains `date_registration` and
+`date_unregistration` for each enrollment. Neither column is used in the
+current graph:
+
+| Column | Status | Reason |
+|--------|--------|--------|
+| `date_unregistration` | **Permanently excluded** | Directly reveals whether a student withdrew — withdrawal is part of `target=1`. Including this column would constitute label leakage. |
+| `date_registration` | **Not currently included** | No evidence of predictive value over existing enrollment-time features (`age_band`, `studied_credits`, `num_of_prev_attempts`). Can be added to the `enrolled_in` edge in a future iteration without pipeline restructuring, provided it is filtered to only include registrations that occurred before the prediction cutoff. |
+
+These exclusions are also documented in `docs/LEAKAGE_PREVENTION.md`.
+
+---
+
 ## Planned Extensions (Not Yet Implemented)
 
-The following features are in scope for later iterations but are **not** present
-in the current parquet files:
-
-**Student node**: none planned — student features are intentionally minimal
-(no aggregate statistics computed from activity data, to prevent leakage at
-node construction time).
+The following additions are deferred to later iterations. All are additions
+only — they do not require changes to the existing schema.
 
 **Course-presentation node**: aggregate statistics such as historical pass rate,
-average VLE clicks, number of enrolled students. These are computable from
-`studentInfo.csv` and `studentVle.csv` without leakage, but are not yet added.
+average VLE clicks, number of enrolled students. Computable from
+`studentInfo.csv` and `studentVle.csv` without leakage.
 
 **Assessment node**: derived temporal features such as `week_due` (week number
-of due date), `is_exam` (boolean), `date_normalized` (scaled to [0, 1]).
+of due date, = `date // 7`), `is_exam` (boolean, `assessment_type == "Exam"`),
+`date_normalized` (scaled to `[0, 1]` within the prediction window).
 
 **VLE resource node**: aggregate statistics such as `total_clicks_all_students`,
-`avg_clicks_per_student`. These would need to be computed using only data
-within the prediction window to remain leakage-safe.
+`avg_clicks_per_student`. Must be computed using only data within the
+prediction window.
 
-**enrolled_in edge**: registration dates (`date_registration`,
-`date_unregistration`) from `studentRegistration.csv`. Note that
-`date_unregistration` reveals withdrawal (part of the target) and must be
-excluded or handled with care.
+**enrolled_in edge**: `date_registration` from `studentRegistration.csv`
+(if filtered to registrations before the prediction cutoff). See Excluded
+Source Columns section above for exclusion rationale for `date_unregistration`.
