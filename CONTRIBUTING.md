@@ -253,6 +253,9 @@ The `data/` directory must contain only the seven canonical OULAD dataset files:
 | `studentVle.csv` | Open University Learning Analytics Dataset (433 MB — gitignored; download separately) |
 | `vle.csv` | Open University Learning Analytics Dataset |
 
+See [`docs/DATA_POLICY.md`](docs/DATA_POLICY.md) for the full data policy,
+including Canvas authorization and IRB requirements.
+
 **Do not commit** any of the following to `data/` or anywhere in the repository:
 
 - Employer-generated exports (e.g. IBM learning platform completion reports)

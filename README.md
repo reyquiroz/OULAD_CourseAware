@@ -97,6 +97,10 @@ pip install torch torch-geometric --index-url https://download.pytorch.org/whl/c
 # Download from: https://analyse.kmi.open.ac.uk/open_dataset
 ```
 
+> **Data policy**: This repository uses only the publicly available OULAD dataset
+> (CC BY 4.0). No Canvas data, no IRB-protected data, and no PII is included.
+> See [`docs/DATA_POLICY.md`](docs/DATA_POLICY.md) for the full policy.
+
 ### Build Week 8 Graph
 
 ```bash

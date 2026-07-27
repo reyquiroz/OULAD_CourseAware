@@ -1,5 +1,9 @@
 # OULAD Graph Pipeline — Multi-Week Validation Summary
 
+> For the full per-week consolidated statistics table (node counts, edge counts,
+> label distribution, missingness, temporal checks, runtime), see
+> **[`docs/graph_consolidated_stats.md`](graph_consolidated_stats.md)**.
+
 Produced by `src/summarize_graph_weeks.py`.
 Source: `week{N}_metadata.json` and `week{N}_validation.json` in
 `results/graph/`.
@@ -66,17 +70,10 @@ Expected nulls from raw OULAD source data (resolved by imputation):
 
 | Week | Runtime (s) | Peak memory (MB) |
 | --- | --- | --- |
-| 2 | 7.1 | 915.5 |
+| 2 | 7.0 | 915.5 |
 | 4 | 5.3 | 915.5 |
 | 6 | 6.3 | 915.5 |
 | 8 | 6.1 | 1049.0 |
-
-> **Note**: This summary is generated from `week{N}_metadata.json` and
-> `week{N}_validation_summary.txt` files under `results/graph/`. After any
-> pipeline run, regenerate it with:
-> ```bash
-> python src/summarize_graph_weeks.py
-> ```
 
 ---
 

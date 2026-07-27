@@ -102,7 +102,7 @@
     "edges_interacted_with": "week06_edges_interacted_with.parquet",
     "enrollments": "week06_enrollments.parquet"
   },
-  "elapsed_seconds": 6.28,
+  "elapsed_seconds": 5.72,
   "peak_memory_mb": 915.5,
   "max_date_submitted": 42,
   "pre_imputation_nulls": {
