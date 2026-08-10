@@ -186,7 +186,7 @@ Test presentation: `["2014J"]`
 > | File | Description |
 > |------|-------------|
 > | `results/lcpo/course_presentation_difficulty.csv` | Aggregated: one row per course-presentation, AUROC mean±std across all weeks and models. Use for a quick overall hardness ranking. |
-> | `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: one row per `(Course_Presentation, Week, Model)` — up to 440 rows. Use for per-week or per-model analysis. |
+> | `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: one row per `(Course_Presentation, Week, Model)` — up to 352 rows. Use for per-week or per-model analysis. |
 
 
 LCPO reveals significant variation across course-presentations. AUROC is aggregated across
@@ -238,7 +238,7 @@ Precision_std, Recall_mean, Recall_std, Balanced_Acc_mean, Balanced_Acc_std`
 | `results/lcpo/lcpo_results_detailed.csv` | LCPO: all weeks × models × course-presentations |
 | `results/lcpo/random_vs_lcpo_comparison.csv` | Random vs LCPO per model (Week 8) |
 | `results/lcpo/course_presentation_difficulty.csv` | Aggregated: per-course AUROC mean±std (all weeks × models), sorted hardest first |
-| `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: AUROC per `(Course_Presentation, Week, Model)` — 440 rows |
+| `results/lcpo/course_difficulty_by_week_model.csv` | Long-format: AUROC per `(Course_Presentation, Week, Model)` — 352 rows |
 | `results/lcpo/course_difficulty_chart.png` | Boxplot of per-course AUROC distribution |
 | `results/cross_course/future_presentation_results.csv` | Future-presentation: all weeks × models |
 | `results/comparison/all_splits_comparison.csv` | Unified: all weeks × models × all 3 splits |

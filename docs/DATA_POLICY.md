@@ -60,7 +60,7 @@ See also the **Data Directory Policy** section in `CONTRIBUTING.md`.
 ## Canvas Authorization and IRB
 
 This project **does not currently use any Canvas data or data collected
-under an IRB protocol**. All analyses are performed on the public OULAD dataset.
+under an IRB protocol**. A formal institutional data request is in preparation; see the draft letter in [`docs/keitha_pearce_data_request_draft.md`](keitha_pearce_data_request_draft.md). All analyses are performed on the public OULAD dataset.
 
 If future work involves:
 

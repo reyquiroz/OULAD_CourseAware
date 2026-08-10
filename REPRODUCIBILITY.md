@@ -38,7 +38,7 @@ commands were verified on the environment described below.
 ### 1. Clone and set up the environment
 
 ```bash
-git clone https://github.com/reyquiroz/OULAD_CourseAware.git
+git clone https://github.com/BioAI-Systems-Lab/CourseAware.git
 cd OULAD_CourseAware
 
 # Python 3.11.11 is pinned in .python-version

@@ -59,7 +59,7 @@ for w in WEEKS:
         check(split["is_val"].sum()   > 0, f"{label}: val is non-empty")
         check(split["is_test"].sum()  > 0, f"{label}: test is non-empty")
     except Exception as exc:
-        check(False, f"{label}: ERROR — {exc}")
+        check(False, f"{label}: ERROR -- {exc}")
 
 
 # ── 2. LCPO split ──────────────────────────────────────────────────────────
@@ -75,28 +75,62 @@ for w in WEEKS:
         n_folds = len(folds)
         check(n_folds == 22, f"{label}: 22 folds present (found {n_folds})")
 
-        leakage_found = False
+        all_indices = set(enroll.index)
+        fold_index_sets: list[set] = []
+
         for _, row in folds.iterrows():
             mod, pres = row["held_out_module"], row["held_out_presentation"]
-            test_mask  = (enroll["code_module"] == mod) & (enroll["code_presentation"] == pres)
-            train_mask = ~test_mask
-            # held-out must not appear in train
-            leaked = enroll.loc[
-                train_mask & (enroll["code_module"] == mod) & (enroll["code_presentation"] == pres)
-            ]
-            if len(leaked) > 0:
-                leakage_found = True
-                failures.append(f"{label}: {mod}/{pres} found in train set")
-                print(f"  [FAIL] {label}: {mod}/{pres} leaked into train ({len(leaked)} rows)")
-            # test must be non-empty
-            if test_mask.sum() == 0:
-                leakage_found = True
-                failures.append(f"{label}: {mod}/{pres} test set is empty")
+            expected_n_test  = int(row["n_test"])
+            expected_n_train = int(row["n_train"])
 
-        if not leakage_found:
-            check(True, f"{label}: no held-out presentation found in any train set")
+            # Derive test/train index sets independently from the enrollments table.
+            # The test set is every enrollment belonging to the held-out course-presentation;
+            # the train set is every other enrollment.
+            test_idx  = set(enroll.index[
+                (enroll["code_module"] == mod) & (enroll["code_presentation"] == pres)
+            ])
+            train_idx = all_indices - test_idx
+
+            fold_index_sets.append(test_idx)
+
+            # The held-out course-presentation must appear in the test set
+            check(len(test_idx) > 0,
+                  f"{label} fold {mod}/{pres}: test set is non-empty")
+            # The held-out course-presentation must NOT appear in the training set
+            leaked = enroll.loc[
+                list(train_idx),
+                ["code_module", "code_presentation"]
+            ]
+            no_leakage = not (
+                (leaked["code_module"] == mod) & (leaked["code_presentation"] == pres)
+            ).any()
+            check(no_leakage,
+                  f"{label} fold {mod}/{pres}: held-out presentation absent from train set")
+            # Train set must also be non-empty
+            check(len(train_idx) > 0,
+                  f"{label} fold {mod}/{pres}: train set is non-empty")
+            # Complementarity: union == all enrollments, intersection == empty
+            check(train_idx | test_idx == all_indices,
+                  f"{label} fold {mod}/{pres}: train U test == all enrollments")
+            check(len(train_idx & test_idx) == 0,
+                  f"{label} fold {mod}/{pres}: train ^ test == empty")
+            # Actual counts must match the saved expected counts
+            check(len(test_idx) == expected_n_test,
+                  f"{label} fold {mod}/{pres}: test count {len(test_idx)} == expected {expected_n_test}")
+            check(len(train_idx) == expected_n_train,
+                  f"{label} fold {mod}/{pres}: train count {len(train_idx)} == expected {expected_n_train}")
+
+        # Unique fold coverage: every enrollment index appears in exactly one fold's test set
+        if n_folds == 22:
+            from collections import Counter
+            fold_membership = Counter(idx for s in fold_index_sets for idx in s)
+            each_once = all(v == 1 for v in fold_membership.values())
+            union_size = len(fold_membership)
+            check(each_once and union_size == len(enroll),
+                  f"{label}: each enrollment belongs to exactly one fold's test set")
+
     except Exception as exc:
-        check(False, f"{label}: ERROR — {exc}")
+        check(False, f"{label}: ERROR -- {exc}")
 
 
 # ── 3. Future-presentation split ──────────────────────────────────────────
@@ -124,7 +158,7 @@ for w in WEEKS:
         check(split["is_train"].sum() > 0, f"{label}: train is non-empty")
         check(split["is_test"].sum()  > 0, f"{label}: test is non-empty")
     except Exception as exc:
-        check(False, f"{label}: ERROR — {exc}")
+        check(False, f"{label}: ERROR -- {exc}")
 
 
 # ── Summary ────────────────────────────────────────────────────────────────

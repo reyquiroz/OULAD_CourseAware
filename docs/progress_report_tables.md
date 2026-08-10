@@ -4,9 +4,15 @@ All figures in this document are drawn directly from saved result files in this
 repository. Each table cites its source file so numbers can be verified and
 regenerated independently.
 
+> **Note — Scope of results in this document**: All AUROC values and evaluation
+> metrics reported in the tables below reflect the **tabular baseline pipeline**
+> (LightGBM trained on engineered tabular features). Graph-model (GNN) evaluation
+> is currently in progress; graph-model AUROC results are not yet available and
+> are not represented anywhere in this document.
+
 ---
 
-## Table 1 — Strategy A vs. Strategy B: Assessment Filter Comparison
+## Table 1 — Strategy A vs. Strategy B: Assessment Filter Comparison (Tabular Baseline — LightGBM)
 
 Strategy A applies only a due-date guard (`assessments.date ≤ window`).  
 Strategy B (current pipeline) adds a submission-date guard (`date_submitted ≤ window`),
@@ -99,7 +105,7 @@ Post-imputation, all tables have zero nulls (asserted in `build_node_tables()`).
 
 ---
 
-## Table 4 — Temporal Validation: LightGBM AUROC Across Prediction Weeks
+## Table 4 — Temporal Validation: LightGBM AUROC Across Prediction Weeks (Tabular Baseline — LightGBM)
 
 Performance improves with each additional week of observable data.
 All results use the random-student 5-fold CV split (Strategy B dual-filter).
@@ -139,6 +145,16 @@ out-of-distribution performance.
 **Key observation**: The LCPO standard deviation of ±0.076 is substantially
 larger than the random-student ±0.004, reflecting genuine course-specific
 variation — not noise. This is quantified in Table 6.
+
+> **Note — two separate evaluation protocols**: The AUROC values in Tables 4
+> and 5 come exclusively from the **tabular pipeline** (LightGBM), which uses
+> 5-fold random-student cross-validation as its primary split (described in
+> Table 4). The **graph pipeline** uses a distinct saved 70/10/20 random split
+> stored at
+> `results/graph/evaluation/week{N:02d}/splits/week{N:02d}_random_split.parquet`;
+> this split is used during graph-model training only and is not reflected in
+> the tables above. Graph-model AUROC results are not yet available and will be
+> reported separately once graph training is complete.
 
 ---
 

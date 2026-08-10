@@ -86,3 +86,10 @@ dmypy.json
 # ── Tool-internal (Bob / Speckit — not project content) ──────────────────
 .bob/
 .specify/
+
+# ── Working / planning documents (generated reports, plan files) ──────────
+reynaldo-feedback-resolution-plan.md
+reynaldo-feedback-resolution-plan-v2.md
+reynaldo-quiroz-feedback-requirements-traceability.html
+feedback-resolution-traceability.html
+docs/progress_report.html

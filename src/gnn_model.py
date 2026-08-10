@@ -1,633 +1,566 @@
-"""
-OULAD Graph Neural Network Implementation
-Heterogeneous graph-based model for at-risk student prediction
+# NOTE: Prediction unit is the enrolled_in edge (one per enrollment, 32,593 total)
+# Each enrolled_in edge connects a student node to a course_presentation node and
+# carries one binary label (target: 1 = at-risk, 0 = success). The GNN predicts
+# at-risk probability per edge rather than per student, so students with multiple
+# enrollments each get an independent prediction without label ambiguity.
 
-This module implements a GNN architecture for OULAD using PyTorch Geometric.
-Based on the graph schema defined in docs/INITIAL_GRAPH_CONSTRUCTION_PLAN.md
-"""
-
+import os
+import glob as _glob
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import SAGEConv, GATConv, HeteroConv, Linear
 from torch_geometric.data import HeteroData
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import sys
-from typing import Dict, List, Tuple
+from torch_geometric.nn import HeteroConv, SAGEConv
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    balanced_accuracy_score,
+)
+from sklearn.preprocessing import LabelEncoder
+import copy
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
+ARTIFACT_DIR = "results/graph/artifacts"
+EVAL_DIR = "results/graph/evaluation"
 
-from config import DATA_DIR, RESULTS_DIR
+SEED = 42
 
 
-class HeteroGNN(nn.Module):
+# ---------------------------------------------------------------------------
+# Helper — one-hot encode a categorical Series into a float tensor
+# ---------------------------------------------------------------------------
+
+def _onehot(series: pd.Series) -> torch.Tensor:
+    le = LabelEncoder()
+    codes = le.fit_transform(series.fillna("Unknown").astype(str))
+    n_classes = len(le.classes_)
+    t = torch.zeros(len(codes), n_classes, dtype=torch.float32)
+    t[torch.arange(len(codes)), torch.tensor(codes)] = 1.0
+    return t
+
+
+def _numeric(series: pd.Series) -> torch.Tensor:
+    return torch.tensor(series.fillna(0).values, dtype=torch.float32).unsqueeze(1)
+
+
+# ---------------------------------------------------------------------------
+# GraphDataLoader
+# ---------------------------------------------------------------------------
+
+class GraphDataLoader:
+    """Loads all parquet artifacts for a given week and returns a HeteroData object.
+
+    Node features are derived from the parquet columns:
+    - Categorical columns → one-hot encoded
+    - Numeric columns → raw float, shape (N, 1)
+    Features for each node type are concatenated into a single x tensor.
+
+    Edge features are stored in `edge_attr` tensors.
+
+    The enrolled_in edge additionally receives:
+    - `y`: binary target labels (from week{N}_enrollments.parquet)
+    - `edge_index_in_enrollments`: integer row positions (0..32592) used by
+      load_split_masks to align the split file to edges.
     """
-    Heterogeneous Graph Neural Network for OULAD
 
-    Node types:
-    - student: Student nodes with demographic features
-    - course: Course-presentation nodes
-    - assessment: Assessment nodes
-    - vle_resource: VLE resource nodes
+    def __init__(self, week: int, artifact_dir: str = ARTIFACT_DIR):
+        self.week = week
+        self.prefix = os.path.join(artifact_dir, f"week{week:02d}")
 
-    Edge types:
-    - (student, enrolled_in, course)
-    - (student, interacts_with, vle_resource)
-    - (student, submits, assessment)
-    - (course, contains, assessment)
-    - (course, has_resource, vle_resource)
-    - And reverse edges
-    """
+    def _path(self, suffix: str) -> str:
+        return f"{self.prefix}_{suffix}.parquet"
 
-    def __init__(
-        self,
-        metadata: Tuple,
-        hidden_channels: int = 64,
-        num_layers: int = 2,
-        dropout: float = 0.3,
-        use_attention: bool = False,
-    ):
-        """
-        Initialize Heterogeneous GNN
+    def load(self) -> HeteroData:
+        data = HeteroData()
 
-        Args:
-            metadata: Graph metadata (node_types, edge_types)
-            hidden_channels: Hidden dimension size
-            num_layers: Number of GNN layers
-            dropout: Dropout rate
-            use_attention: Use GAT instead of GraphSAGE
-        """
-        super().__init__()
+        # ---- Node tables ----
 
-        self.hidden_channels = hidden_channels
-        self.num_layers = num_layers
-        self.dropout = dropout
+        # student
+        st = pd.read_parquet(self._path("nodes_student"))
+        st_cat = ["gender", "region", "highest_education", "imd_band", "disability"]
+        data["student"].x = torch.cat(
+            [_onehot(st[c]) for c in st_cat], dim=1
+        )  # shape (N_student, sum_of_onehot_dims)
+        data["student"].node_id = torch.tensor(st["id_student"].values, dtype=torch.long)
 
-        # Choose convolution type
-        if use_attention:
-            conv_class = lambda in_ch, out_ch: GATConv(
-                in_ch, out_ch, heads=4, concat=False
+        # course_presentation
+        cp = pd.read_parquet(self._path("nodes_course_presentation"))
+        cp_cat = ["code_module", "code_presentation"]
+        cp_num = _numeric(cp["module_presentation_length"])
+        data["course_presentation"].x = torch.cat(
+            [_onehot(cp[c]) for c in cp_cat] + [cp_num], dim=1
+        )
+        data["course_presentation"].node_id = torch.arange(len(cp), dtype=torch.long)
+
+        # assessment  — may have 0 rows at Week 2
+        ass = pd.read_parquet(self._path("nodes_assessment"))
+        if len(ass) > 0:
+            ass_cat = ["assessment_type"]
+            ass_num = [_numeric(ass["weight"]), _numeric(ass["date"])]
+            data["assessment"].x = torch.cat(
+                [_onehot(ass[c]) for c in ass_cat] + ass_num, dim=1
             )
         else:
-            conv_class = lambda in_ch, out_ch: SAGEConv(in_ch, out_ch)
+            # Placeholder feature tensor with 1 dummy feature so downstream
+            # linear layers don't fail on empty node sets.
+            data["assessment"].x = torch.zeros((0, 1), dtype=torch.float32)
+        data["assessment"].node_id = torch.arange(len(ass), dtype=torch.long)
 
-        # Create heterogeneous convolution layers
-        self.convs = nn.ModuleList()
-        for i in range(num_layers):
-            conv_dict = {}
-            for edge_type in metadata[1]:
-                src_type, _, dst_type = edge_type
+        # vle_resource
+        vle = pd.read_parquet(self._path("nodes_vle_resource"))
+        vle_cat = ["activity_type", "code_module", "code_presentation"]
+        vle_num = [_numeric(vle["week_from"]), _numeric(vle["week_to"])]
+        data["vle_resource"].x = torch.cat(
+            [_onehot(vle[c]) for c in vle_cat] + vle_num, dim=1
+        )
+        data["vle_resource"].node_id = torch.arange(len(vle), dtype=torch.long)
 
-                if i == 0:
-                    # First layer: use actual input dimensions (will be set dynamically)
-                    conv_dict[edge_type] = conv_class(-1, hidden_channels)
-                else:
-                    conv_dict[edge_type] = conv_class(hidden_channels, hidden_channels)
+        # ---- Enrollment labels ----
+        enroll = pd.read_parquet(self._path("enrollments"))
+        labels = torch.tensor(enroll["target"].values, dtype=torch.float32)
 
-            self.convs.append(HeteroConv(conv_dict, aggr="mean"))
+        # ---- Edge tables ----
 
-        # Batch normalization for each node type
-        self.batch_norms = nn.ModuleList(
-            [
-                nn.ModuleDict(
-                    {
-                        node_type: nn.BatchNorm1d(hidden_channels)
-                        for node_type in metadata[0]
-                    }
-                )
-                for _ in range(num_layers)
-            ]
+        # enrolled_in  (student → course_presentation)
+        ei = pd.read_parquet(self._path("edges_enrolled_in"))
+        ei_src = torch.tensor(ei["src"].values, dtype=torch.long)
+        ei_dst = torch.tensor(ei["dst"].values, dtype=torch.long)
+        # enrolled_in edge attributes: num_of_prev_attempts, studied_credits (numeric)
+        # age_band (categorical → one-hot)
+        ei_age = _onehot(ei["age_band"])
+        ei_num = torch.cat(
+            [_numeric(ei["num_of_prev_attempts"]), _numeric(ei["studied_credits"])], dim=1
+        )
+        ei_attr = torch.cat([ei_age, ei_num], dim=1)
+
+        ei_key = ("student", "enrolled_in", "course_presentation")
+        data[ei_key].edge_index = torch.stack([ei_src, ei_dst], dim=0)
+        data[ei_key].edge_attr = ei_attr
+        data[ei_key].y = labels
+        # Row order of enrolled_in == row order of enrollments.parquet (both from studentInfo)
+        data[ei_key].enrollment_idx = torch.arange(len(ei), dtype=torch.long)
+
+        # Reverse edge: course_presentation → student (lets student nodes receive messages)
+        rev_ei_key = ("course_presentation", "rev_enrolled_in", "student")
+        data[rev_ei_key].edge_index = torch.stack([ei_dst, ei_src], dim=0)
+
+        # contains_assess  (course_presentation → assessment)
+        ca = pd.read_parquet(self._path("edges_contains_assess"))
+        if len(ca) > 0:
+            ca_key = ("course_presentation", "contains_assess", "assessment")
+            data[ca_key].edge_index = torch.tensor(
+                np.stack([ca["src"].values, ca["dst"].values], axis=0), dtype=torch.long
+            )
+            # Reverse: assessment → course_presentation
+            rev_ca_key = ("assessment", "rev_contains_assess", "course_presentation")
+            data[rev_ca_key].edge_index = torch.tensor(
+                np.stack([ca["dst"].values, ca["src"].values], axis=0), dtype=torch.long
+            )
+
+        # has_resource  (course_presentation → vle_resource)
+        hr = pd.read_parquet(self._path("edges_has_resource"))
+        hr_key = ("course_presentation", "has_resource", "vle_resource")
+        data[hr_key].edge_index = torch.tensor(
+            np.stack([hr["src"].values, hr["dst"].values], axis=0), dtype=torch.long
+        )
+        # Reverse: vle_resource → course_presentation
+        rev_hr_key = ("vle_resource", "rev_has_resource", "course_presentation")
+        data[rev_hr_key].edge_index = torch.tensor(
+            np.stack([hr["dst"].values, hr["src"].values], axis=0), dtype=torch.long
         )
 
-        # Final classifier for student nodes
-        self.classifier = nn.Sequential(
-            Linear(hidden_channels, hidden_channels // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            Linear(hidden_channels // 2, 2),  # Binary classification
+        # submitted  (student → assessment)
+        sub = pd.read_parquet(self._path("edges_submitted"))
+        if len(sub) > 0:
+            sub_key = ("student", "submitted", "assessment")
+            data[sub_key].edge_index = torch.tensor(
+                np.stack([sub["src"].values, sub["dst"].values], axis=0), dtype=torch.long
+            )
+            data[sub_key].edge_attr = _numeric(sub["score"])
+            # Reverse: assessment → student
+            rev_sub_key = ("assessment", "rev_submitted", "student")
+            data[rev_sub_key].edge_index = torch.tensor(
+                np.stack([sub["dst"].values, sub["src"].values], axis=0), dtype=torch.long
+            )
+
+        # interacted_with  (student → vle_resource)
+        iw = pd.read_parquet(self._path("edges_interacted_with"))
+        iw_num_cols = ["total_clicks", "n_interactions", "first_day", "last_day", "active_days"]
+        iw_key = ("student", "interacted_with", "vle_resource")
+        data[iw_key].edge_index = torch.tensor(
+            np.stack([iw["src"].values, iw["dst"].values], axis=0), dtype=torch.long
+        )
+        data[iw_key].edge_attr = torch.cat(
+            [_numeric(iw[c]) for c in iw_num_cols], dim=1
+        )
+        # Reverse: vle_resource → student
+        rev_iw_key = ("vle_resource", "rev_interacted_with", "student")
+        data[rev_iw_key].edge_index = torch.tensor(
+            np.stack([iw["dst"].values, iw["src"].values], axis=0), dtype=torch.long
         )
 
-    def forward(
-        self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict
-    ) -> torch.Tensor:
-        """
-        Forward pass
-
-        Args:
-            x_dict: Dictionary of node features {node_type: features}
-            edge_index_dict: Dictionary of edge indices {edge_type: edge_index}
-
-        Returns:
-            Logits for student nodes
-        """
-        # Apply GNN layers
-        for i, conv in enumerate(self.convs):
-            # Heterogeneous convolution
-            x_dict = conv(x_dict, edge_index_dict)
-
-            # Apply batch norm and activation
-            x_dict = {
-                key: F.relu(self.batch_norms[i][key](x)) for key, x in x_dict.items()
-            }
-
-            # Dropout
-            x_dict = {
-                key: F.dropout(x, p=self.dropout, training=self.training)
-                for key, x in x_dict.items()
-            }
-
-        # Classification on student nodes only
-        student_embeddings = x_dict["student"]
-        logits = self.classifier(student_embeddings)
-
-        return logits
-
-    def get_embeddings(
-        self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict
-    ) -> Dict[str, torch.Tensor]:
-        """Get node embeddings after GNN layers"""
-        for i, conv in enumerate(self.convs):
-            x_dict = conv(x_dict, edge_index_dict)
-            x_dict = {
-                key: F.relu(self.batch_norms[i][key](x)) for key, x in x_dict.items()
-            }
-        return x_dict
-
-
-class GraphConstructor:
-    """Construct heterogeneous graph from OULAD data"""
-
-    def __init__(self, prediction_week: int = 8):
-        """
-        Initialize graph constructor
-
-        Args:
-            prediction_week: Week for temporal filtering (leakage prevention)
-        """
-        self.prediction_week = prediction_week
-        self.window_days = prediction_week * 7
-
-    def load_data(self) -> Dict[str, pd.DataFrame]:
-        """Load OULAD datasets"""
-        print(f"Loading OULAD data for week {self.prediction_week}...")
-
-        data = {
-            "student_info": pd.read_csv(DATA_DIR / "studentInfo.csv"),
-            "student_vle": pd.read_csv(DATA_DIR / "studentVle.csv"),
-            "student_assessment": pd.read_csv(DATA_DIR / "studentAssessment.csv"),
-            "assessments": pd.read_csv(DATA_DIR / "assessments.csv"),
-            "vle": pd.read_csv(DATA_DIR / "vle.csv"),
-            "courses": pd.read_csv(DATA_DIR / "courses.csv"),
-        }
-
-        # Apply label mapping
-        data["student_info"]["target"] = data["student_info"]["final_result"].apply(
-            lambda x: 1 if x in ["Fail", "Withdrawn"] else 0
-        )
-
-        # Temporal filtering (leakage prevention)
-        data["student_vle"] = data["student_vle"][
-            data["student_vle"]["date"] <= self.window_days
-        ]
-
-        assess_with_dates = data["student_assessment"].merge(
-            data["assessments"][["id_assessment", "date"]],
-            on="id_assessment",
-            how="left",
-        )
-        data["student_assessment"] = assess_with_dates[
-            assess_with_dates["date"] <= self.window_days
-        ]
-
-        print(f"✓ Data loaded and filtered to week {self.prediction_week}")
         return data
 
-    def create_node_features(
-        self, data: Dict[str, pd.DataFrame]
-    ) -> Dict[str, torch.Tensor]:
-        """Create node features for all node types"""
-        print("Creating node features...")
 
-        node_features = {}
+# ---------------------------------------------------------------------------
+# load_split_masks
+# ---------------------------------------------------------------------------
 
-        # 1. Student node features
-        # TODO (next iteration): load student features from the graph parquet
-        #   artifacts (week{N}_nodes_student.parquet) rather than directly from
-        #   studentInfo.csv.  The canonical student node contains only stable
-        #   attributes: gender, region, highest_education, imd_band, disability.
-        #   age_band, num_of_prev_attempts, and studied_credits are
-        #   enrollment-scoped and live on the enrolled_in edge — do not add them
-        #   to the student node feature matrix.
-        student_df = data["student_info"].copy()
+def load_split_masks(
+    week: int,
+    split_type: str = "random",
+    eval_dir: str = EVAL_DIR,
+):
+    """Return (train_mask, val_mask, test_mask) boolean tensors over 32,593 enrollments.
 
-        # Demographic features (one-hot encoded) — stable per student
-        categorical_cols = [
-            "gender",
-            "region",
-            "highest_education",
-            "imd_band",
-            "disability",
+    Parameters
+    ----------
+    week:       int — prediction week (2, 4, 6, 8)
+    split_type: "random" or "lcpo"
+    eval_dir:   base directory for evaluation split files
+
+    The random split parquet has columns is_train / is_val / is_test (bool).
+    Row order matches week{N}_enrollments.parquet (both derived from studentInfo.csv).
+    """
+    w = f"week{week:02d}"
+    split_dir = os.path.join(eval_dir, w, "splits")
+
+    if split_type == "random":
+        path = os.path.join(split_dir, f"{w}_random_split.parquet")
+        sp = pd.read_parquet(path)
+        train_mask = torch.tensor(sp["is_train"].values, dtype=torch.bool)
+        val_mask = torch.tensor(sp["is_val"].values, dtype=torch.bool)
+        test_mask = torch.tensor(sp["is_test"].values, dtype=torch.bool)
+    elif split_type == "lcpo":
+        path = os.path.join(split_dir, f"{w}_lcpo_folds.csv")
+        sp = pd.read_csv(path)
+        # LCPO CSV has a 'fold' column; use fold 0 as test, rest as train, no val
+        if "fold" not in sp.columns:
+            raise ValueError(f"LCPO file {path} has no 'fold' column")
+        test_fold = sp["fold"].min()
+        test_mask = torch.tensor((sp["fold"] == test_fold).values, dtype=torch.bool)
+        val_mask = torch.zeros(len(sp), dtype=torch.bool)
+        train_mask = ~test_mask
+    else:
+        raise ValueError(f"Unknown split_type '{split_type}'. Use 'random' or 'lcpo'.")
+
+    return train_mask, val_mask, test_mask
+
+
+# ---------------------------------------------------------------------------
+# EnrollmentGNN
+# ---------------------------------------------------------------------------
+
+class EnrollmentGNN(nn.Module):
+    """Heterogeneous GNN with an edge-level prediction head on enrolled_in edges.
+
+    Architecture:
+    - Two rounds of HeteroConv (wrapping SAGEConv per edge type)
+    - Edge representation = concat(src_embedding, dst_embedding) for enrolled_in
+    - Linear output head → scalar logit → sigmoid → at-risk probability
+    """
+
+    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1):
+        super().__init__()
+        torch.manual_seed(SEED)
+
+        # Build two HeteroConv layers.  SAGEConv expects (in_channels, out_channels).
+        # Layer 1: heterogeneous in → hidden
+        conv1_dict = {}
+        conv2_dict = {}
+
+        # Forward edge types present in every week
+        base_edge_types = [
+            ("student", "enrolled_in", "course_presentation"),
+            ("course_presentation", "has_resource", "vle_resource"),
+            ("student", "interacted_with", "vle_resource"),
+            # Reverse edges to ensure all node types receive messages
+            ("course_presentation", "rev_enrolled_in", "student"),
+            ("vle_resource", "rev_has_resource", "course_presentation"),
+            ("vle_resource", "rev_interacted_with", "student"),
         ]
-        student_encoded = pd.get_dummies(student_df[categorical_cols], drop_first=True)
-
-        # NOTE: age_band, num_of_prev_attempts, studied_credits are
-        # enrollment-scoped (vary across a student's courses) and are stored on
-        # the enrolled_in edge, not the student node.  They are excluded here.
-        student_features = student_encoded.copy()
-        node_features["student"] = torch.FloatTensor(student_features.values)
-
-        # 2. Course node features
-        course_df = data["courses"].copy()
-        course_features = pd.get_dummies(course_df[["code_module"]], drop_first=True)
-        course_features["length"] = course_df["module_presentation_length"].fillna(0)
-        node_features["course"] = torch.FloatTensor(course_features.values)
-
-        # 3. Assessment node features
-        assessment_df = data["assessments"].copy()
-        assessment_encoded = pd.get_dummies(
-            assessment_df[["assessment_type"]], drop_first=True
-        )
-        assessment_features = pd.concat(
-            [assessment_encoded, assessment_df[["weight", "date"]].fillna(0)], axis=1
-        )
-        node_features["assessment"] = torch.FloatTensor(assessment_features.values)
-
-        # 4. VLE resource node features
-        vle_df = data["vle"].copy()
-        vle_encoded = pd.get_dummies(vle_df[["activity_type"]], drop_first=True)
-        vle_features = pd.concat(
-            [vle_encoded, vle_df[["week_from", "week_to"]].fillna(0)], axis=1
-        )
-        node_features["vle_resource"] = torch.FloatTensor(vle_features.values)
-
-        print(f"✓ Created features for {len(node_features)} node types")
-        for node_type, features in node_features.items():
-            print(f"  {node_type}: {features.shape}")
-
-        return node_features
-
-    def create_node_mappings(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Dict]:
-        """Create mappings from original IDs to graph node indices"""
-        print("Creating node ID mappings...")
-
-        mappings = {}
-
-        # Student mapping
-        student_ids = data["student_info"]["id_student"].unique()
-        mappings["student"] = {sid: idx for idx, sid in enumerate(student_ids)}
-
-        # Course mapping (code_module + code_presentation)
-        courses = data["courses"][
-            ["code_module", "code_presentation"]
-        ].drop_duplicates()
-        course_ids = [
-            f"{row['code_module']}_{row['code_presentation']}"
-            for _, row in courses.iterrows()
-        ]
-        mappings["course"] = {cid: idx for idx, cid in enumerate(course_ids)}
-
-        # Assessment mapping
-        assessment_ids = data["assessments"]["id_assessment"].unique()
-        mappings["assessment"] = {aid: idx for idx, aid in enumerate(assessment_ids)}
-
-        # VLE resource mapping
-        vle_ids = data["vle"]["id_site"].unique()
-        mappings["vle_resource"] = {vid: idx for idx, vid in enumerate(vle_ids)}
-
-        print(f"✓ Created mappings:")
-        for node_type, mapping in mappings.items():
-            print(f"  {node_type}: {len(mapping)} nodes")
-
-        return mappings
-
-    def create_edges(
-        self, data: Dict[str, pd.DataFrame], mappings: Dict[str, Dict]
-    ) -> Dict[Tuple[str, str, str], torch.Tensor]:
-        """Create edge indices for all edge types"""
-        print("Creating edges...")
-
-        edge_index_dict = {}
-
-        # 1. Student -> Course (enrolled_in)
-        student_course = data["student_info"][
-            ["id_student", "code_module", "code_presentation"]
-        ].copy()
-        student_course["course_id"] = (
-            student_course["code_module"] + "_" + student_course["code_presentation"]
-        )
-
-        src = [
-            mappings["student"][sid]
-            for sid in student_course["id_student"]
-            if sid in mappings["student"]
-        ]
-        dst = [
-            mappings["course"][cid]
-            for cid in student_course["course_id"]
-            if cid in mappings["course"]
+        # Edge types present only when assessments exist
+        assess_edge_types = [
+            ("course_presentation", "contains_assess", "assessment"),
+            ("student", "submitted", "assessment"),
+            ("assessment", "rev_contains_assess", "course_presentation"),
+            ("assessment", "rev_submitted", "student"),
         ]
 
-        edge_index_dict[("student", "enrolled_in", "course")] = torch.tensor(
-            [src, dst], dtype=torch.long
-        )
-        edge_index_dict[("course", "rev_enrolled_in", "student")] = torch.tensor(
-            [dst, src], dtype=torch.long
-        )
+        all_edge_types = base_edge_types + assess_edge_types
 
-        # 2. Student -> VLE Resource (interacts_with)
-        student_vle = data["student_vle"][["id_student", "id_site"]].copy()
+        for et in all_edge_types:
+            src_type, _, dst_type = et
+            in_src = in_channels_dict.get(src_type, hidden_dim)
+            in_dst = in_channels_dict.get(dst_type, hidden_dim)
+            conv1_dict[et] = SAGEConv((in_src, in_dst), hidden_dim)
+            conv2_dict[et] = SAGEConv((hidden_dim, hidden_dim), hidden_dim)
 
-        src = [
-            mappings["student"][sid]
-            for sid in student_vle["id_student"]
-            if sid in mappings["student"]
-        ]
-        dst = [
-            mappings["vle_resource"][vid]
-            for vid in student_vle["id_site"]
-            if vid in mappings["vle_resource"]
-        ]
+        self.conv1 = HeteroConv(conv1_dict, aggr="sum")
+        self.conv2 = HeteroConv(conv2_dict, aggr="sum")
 
-        edge_index_dict[("student", "interacts_with", "vle_resource")] = torch.tensor(
-            [src, dst], dtype=torch.long
-        )
-        edge_index_dict[("vle_resource", "rev_interacts_with", "student")] = (
-            torch.tensor([dst, src], dtype=torch.long)
+        self.act = nn.ReLU()
+
+        # Edge-level prediction head: concat student + course_presentation embeddings
+        self.edge_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
         )
 
-        # 3. Student -> Assessment (submits)
-        student_assess = data["student_assessment"][
-            ["id_student", "id_assessment"]
-        ].copy()
+    def _fill_missing(self, h_dict: dict, x_dict: dict, hidden_dim: int) -> dict:
+        """Ensure every node type has a hidden representation (zeros if unreached)."""
+        device = next(iter(h_dict.values())).device
+        for ntype, x in x_dict.items():
+            if ntype not in h_dict:
+                h_dict[ntype] = torch.zeros(x.size(0), hidden_dim, device=device)
+        return h_dict
 
-        src = [
-            mappings["student"][sid]
-            for sid in student_assess["id_student"]
-            if sid in mappings["student"]
-        ]
-        dst = [
-            mappings["assessment"][aid]
-            for aid in student_assess["id_assessment"]
-            if aid in mappings["assessment"]
-        ]
+    def forward(self, data: HeteroData):
+        hidden_dim = next(iter(self.conv1.convs.values())).out_channels
+        x_dict = {ntype: data[ntype].x for ntype in data.node_types}
 
-        edge_index_dict[("student", "submits", "assessment")] = torch.tensor(
-            [src, dst], dtype=torch.long
-        )
-        edge_index_dict[("assessment", "rev_submits", "student")] = torch.tensor(
-            [dst, src], dtype=torch.long
-        )
+        # Build edge_index_dict — only include edge types actually present in data
+        # and registered in conv layers (handles conditional assessment edges)
+        conv1_types = set(self.conv1.convs.keys())
+        conv2_types = set(self.conv2.convs.keys())
 
-        # 4. Course -> Assessment (contains)
-        course_assess = data["assessments"][
-            ["code_module", "code_presentation", "id_assessment"]
-        ].copy()
-        course_assess["course_id"] = (
-            course_assess["code_module"] + "_" + course_assess["code_presentation"]
-        )
+        edge_index_dict = {
+            et: data[et].edge_index
+            for et in data.edge_types
+            if hasattr(data[et], "edge_index") and data[et].edge_index.numel() > 0
+        }
 
-        src = [
-            mappings["course"][cid]
-            for cid in course_assess["course_id"]
-            if cid in mappings["course"]
-        ]
-        dst = [
-            mappings["assessment"][aid]
-            for aid in course_assess["id_assessment"]
-            if aid in mappings["assessment"]
-        ]
+        ei_dict_1 = {et: ei for et, ei in edge_index_dict.items() if et in conv1_types}
+        h_dict = self.conv1(x_dict, ei_dict_1)
+        h_dict = {k: self.act(v) for k, v in h_dict.items()}
+        h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
 
-        edge_index_dict[("course", "contains", "assessment")] = torch.tensor(
-            [src, dst], dtype=torch.long
-        )
-        edge_index_dict[("assessment", "rev_contains", "course")] = torch.tensor(
-            [dst, src], dtype=torch.long
-        )
+        ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
+        h_dict = self.conv2(h_dict, ei_dict_2)
+        h_dict = {k: self.act(v) for k, v in h_dict.items()}
+        h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
 
-        # 5. Course -> VLE Resource (has_resource)
-        course_vle = data["vle"][["code_module", "code_presentation", "id_site"]].copy()
-        course_vle["course_id"] = (
-            course_vle["code_module"] + "_" + course_vle["code_presentation"]
-        )
-
-        src = [
-            mappings["course"][cid]
-            for cid in course_vle["course_id"]
-            if cid in mappings["course"]
-        ]
-        dst = [
-            mappings["vle_resource"][vid]
-            for vid in course_vle["id_site"]
-            if vid in mappings["vle_resource"]
-        ]
-
-        edge_index_dict[("course", "has_resource", "vle_resource")] = torch.tensor(
-            [src, dst], dtype=torch.long
-        )
-        edge_index_dict[("vle_resource", "rev_has_resource", "course")] = torch.tensor(
-            [dst, src], dtype=torch.long
-        )
-
-        print(f"✓ Created {len(edge_index_dict)} edge types:")
-        for edge_type, edge_index in edge_index_dict.items():
-            print(f"  {edge_type}: {edge_index.shape[1]} edges")
-
-        return edge_index_dict
-
-    def create_labels(
-        self, data: Dict[str, pd.DataFrame], mappings: Dict[str, Dict]
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Create labels and masks for student nodes"""
-        num_students = len(mappings["student"])
-
-        # Initialize labels
-        labels = torch.zeros(num_students, dtype=torch.long)
-
-        # Fill in labels
-        student_info = data["student_info"]
-        for _, row in student_info.iterrows():
-            if row["id_student"] in mappings["student"]:
-                idx = mappings["student"][row["id_student"]]
-                labels[idx] = row["target"]
-
-        # Create train/val/test masks (80/10/10 split)
-        num_train = int(0.8 * num_students)
-        num_val = int(0.1 * num_students)
-
-        indices = torch.randperm(num_students)
-
-        train_mask = torch.zeros(num_students, dtype=torch.bool)
-        val_mask = torch.zeros(num_students, dtype=torch.bool)
-        test_mask = torch.zeros(num_students, dtype=torch.bool)
-
-        train_mask[indices[:num_train]] = True
-        val_mask[indices[num_train : num_train + num_val]] = True
-        test_mask[indices[num_train + num_val :]] = True
-
-        return labels, train_mask, val_mask, test_mask
-
-    def construct_graph(self) -> HeteroData:
-        """Construct complete heterogeneous graph"""
-        print("=" * 80)
-        print("CONSTRUCTING HETEROGENEOUS GRAPH")
-        print("=" * 80)
-
-        # Load data
-        data = self.load_data()
-
-        # Create node features
-        node_features = self.create_node_features(data)
-
-        # Create node mappings
-        mappings = self.create_node_mappings(data)
-
-        # Create edges
-        edge_index_dict = self.create_edges(data, mappings)
-
-        # Create labels and masks
-        labels, train_mask, val_mask, test_mask = self.create_labels(data, mappings)
-
-        # Create HeteroData object
-        graph = HeteroData()
-
-        # Add node features
-        for node_type, features in node_features.items():
-            graph[node_type].x = features
-
-        # Add edges
-        for edge_type, edge_index in edge_index_dict.items():
-            graph[edge_type].edge_index = edge_index
-
-        # Add labels and masks (only for student nodes)
-        graph["student"].y = labels
-        graph["student"].train_mask = train_mask
-        graph["student"].val_mask = val_mask
-        graph["student"].test_mask = test_mask
-
-        print("\n" + "=" * 80)
-        print("GRAPH CONSTRUCTION COMPLETE")
-        print("=" * 80)
-        print(f"\nGraph Statistics:")
-        print(f"  Node types: {len(graph.node_types)}")
-        print(f"  Edge types: {len(graph.edge_types)}")
-        print(f"  Total nodes: {sum(graph[nt].num_nodes for nt in graph.node_types)}")
-        print(f"  Total edges: {sum(graph[et].num_edges for et in graph.edge_types)}")
-        print(f"\nStudent nodes:")
-        print(f"  Total: {graph['student'].num_nodes}")
-        print(f"  Train: {train_mask.sum().item()}")
-        print(f"  Val: {val_mask.sum().item()}")
-        print(f"  Test: {test_mask.sum().item()}")
-        print(f"  At-risk rate: {labels.float().mean():.3f}")
-
-        return graph, mappings
+        # Edge-level prediction on enrolled_in
+        ei_key = ("student", "enrolled_in", "course_presentation")
+        src_idx, dst_idx = data[ei_key].edge_index
+        h_src = h_dict["student"][src_idx]              # (E, hidden)
+        h_dst = h_dict["course_presentation"][dst_idx]  # (E, hidden)
+        edge_repr = torch.cat([h_src, h_dst], dim=1)    # (E, 2*hidden)
+        logits = self.edge_head(edge_repr).squeeze(-1)   # (E,)
+        return logits
 
 
-def train_epoch(model, graph, optimizer, criterion):
-    """Train for one epoch"""
+# ---------------------------------------------------------------------------
+# Training / evaluation helpers
+# ---------------------------------------------------------------------------
+
+def train(
+    model: EnrollmentGNN,
+    data: HeteroData,
+    train_mask: torch.Tensor,
+    optimizer: torch.optim.Optimizer,
+) -> float:
+    """One training epoch. Returns mean BCE loss."""
     model.train()
     optimizer.zero_grad()
-
-    # Forward pass
-    out = model(graph.x_dict, graph.edge_index_dict)
-
-    # Calculate loss on training nodes only
-    loss = criterion(
-        out[graph["student"].train_mask],
-        graph["student"].y[graph["student"].train_mask],
+    logits = model(data)
+    y = data[("student", "enrolled_in", "course_presentation")].y
+    loss = nn.functional.binary_cross_entropy_with_logits(
+        logits[train_mask], y[train_mask]
     )
-
-    # Backward pass
     loss.backward()
     optimizer.step()
-
     return loss.item()
 
 
-@torch.no_grad()
-def evaluate(model, graph, mask):
-    """Evaluate model"""
+def compute_pos_weight(train_mask: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Compute pos_weight for BCEWithLogitsLoss (n_neg / n_pos)."""
+    train_labels = labels[train_mask]
+    n_pos = (train_labels == 1).sum().item()
+    n_neg = (train_labels == 0).sum().item()
+    if n_pos == 0:
+        raise ValueError("No positive examples in training set")
+    pos_weight = torch.tensor([n_neg / n_pos], dtype=torch.float32)
+    return pos_weight
+
+
+def run_training_loop(
+    model: EnrollmentGNN,
+    data: HeteroData,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    optimizer: torch.optim.Optimizer,
+    *,
+    max_epochs: int = 200,
+    patience: int = 20,
+    pos_weight: torch.Tensor = None,
+) -> tuple:
+    """Multi-epoch training loop with early stopping and class weighting.
+    
+    Returns (best_val_auroc, best_epoch).
+    """
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    
+    if pos_weight is None:
+        y = data[("student", "enrolled_in", "course_presentation")].y
+        pos_weight = compute_pos_weight(train_mask, y)
+    
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    
+    best_val_auroc = -1
+    best_epoch = -1
+    best_state_dict = None
+    epochs_no_improve = 0
+    
+    for epoch in range(max_epochs):
+        model.train()
+        optimizer.zero_grad()
+        logits = model(data)
+        y = data[("student", "enrolled_in", "course_presentation")].y
+        loss = loss_fn(logits[train_mask], y[train_mask])
+        loss.backward()
+        optimizer.step()
+        
+        # Evaluate on validation set (no print to avoid clutter)
+        model.eval()
+        with torch.no_grad():
+            logits_val = model(data)
+        probs_val = torch.sigmoid(logits_val[val_mask]).cpu().numpy()
+        labels_val = y[val_mask].cpu().numpy()
+        
+        if labels_val.sum() > 0 and (1 - labels_val).sum() > 0:
+            val_auroc = roc_auc_score(labels_val, probs_val)
+            
+            if val_auroc > best_val_auroc:
+                best_val_auroc = val_auroc
+                best_epoch = epoch
+                best_state_dict = copy.deepcopy(model.state_dict())
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+            
+            if epochs_no_improve >= patience:
+                break
+    
+    # Restore best state dict
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+    
+    return best_val_auroc, best_epoch
+
+
+def compute_metrics(probs: np.ndarray, labels: np.ndarray) -> dict:
+    """Compute full metrics dict from probabilities and labels.
+    
+    Parameters
+    ----------
+    probs : np.ndarray
+        Predicted probabilities (shape (n,))
+    labels : np.ndarray
+        True labels (shape (n,))
+    
+    Returns
+    -------
+    dict with keys: auroc, auprc, f1, precision, recall, balanced_acc
+    """
+    threshold = 0.5
+    predictions = (probs >= threshold).astype(int)
+    
+    metrics = {
+        "auroc": roc_auc_score(labels, probs),
+        "auprc": average_precision_score(labels, probs),
+        "f1": f1_score(labels, predictions),
+        "precision": precision_score(labels, predictions),
+        "recall": recall_score(labels, predictions),
+        "balanced_acc": balanced_accuracy_score(labels, predictions),
+    }
+    return metrics
+
+
+def evaluate(
+    model: EnrollmentGNN,
+    data: HeteroData,
+    mask: torch.Tensor,
+    label: str = "val",
+) -> dict:
+    """Compute full metrics dict on the given mask subset."""
     model.eval()
+    with torch.no_grad():
+        logits = model(data)
+    y = data[("student", "enrolled_in", "course_presentation")].y
+    probs = torch.sigmoid(logits[mask]).cpu().numpy()
+    labels = y[mask].cpu().numpy()
+    
+    if labels.sum() == 0 or (1 - labels).sum() == 0:
+        print(f"[{label}] Metrics: N/A (only one class present)")
+        return {}
+    
+    metrics = compute_metrics(probs, labels)
+    print(f"[{label}] Metrics: {metrics}")
+    return metrics
 
-    out = model(graph.x_dict, graph.edge_index_dict)
-    pred = out.argmax(dim=1)
 
-    correct = (pred[mask] == graph["student"].y[mask]).sum()
-    acc = correct / mask.sum()
-
-    return acc.item()
-
-
-def main():
-    """Main execution function"""
-    print("=" * 80)
-    print("OULAD GRAPH NEURAL NETWORK")
-    print("=" * 80)
-
-    # Construct graph
-    constructor = GraphConstructor(prediction_week=8)
-    graph, mappings = constructor.construct_graph()
-
-    # Initialize model
-    print("\nInitializing GNN model...")
-    model = HeteroGNN(
-        metadata=(graph.node_types, graph.edge_types),
-        hidden_channels=64,
-        num_layers=2,
-        dropout=0.3,
-        use_attention=False,
-    )
-
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # Training setup
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-    criterion = nn.CrossEntropyLoss()
-
-    # Training loop
-    print("\nTraining GNN...")
-    num_epochs = 100
-    best_val_acc = 0
-
-    for epoch in range(1, num_epochs + 1):
-        loss = train_epoch(model, graph, optimizer, criterion)
-
-        if epoch % 10 == 0:
-            train_acc = evaluate(model, graph, graph["student"].train_mask)
-            val_acc = evaluate(model, graph, graph["student"].val_mask)
-            test_acc = evaluate(model, graph, graph["student"].test_mask)
-
-            print(
-                f"Epoch {epoch:03d}: Loss={loss:.4f}, "
-                f"Train={train_acc:.4f}, Val={val_acc:.4f}, Test={test_acc:.4f}"
-            )
-
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                # Save best model
-                torch.save(model.state_dict(), RESULTS_DIR / "gnn" / "best_model.pt")
-
-    # Final evaluation
-    print("\n" + "=" * 80)
-    print("TRAINING COMPLETE")
-    print("=" * 80)
-    print(f"Best validation accuracy: {best_val_acc:.4f}")
-
-    # Load best model and evaluate on test set
-    model.load_state_dict(torch.load(RESULTS_DIR / "gnn" / "best_model.pt"))
-    test_acc = evaluate(model, graph, graph["student"].test_mask)
-    print(f"Final test accuracy: {test_acc:.4f}")
-
-    return model, graph, mappings
-
+# ---------------------------------------------------------------------------
+# Smoke test / main
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Create output directory
-    (RESULTS_DIR / "gnn").mkdir(parents=True, exist_ok=True)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
 
-    model, graph, mappings = main()
+    print("Loading Week 2 artifacts...")
+    loader = GraphDataLoader(week=2)
+    data = loader.load()
 
-# Made with Bob
+    print("Graph summary:")
+    for ntype in data.node_types:
+        print(f"  {ntype}: {data[ntype].x.shape}")
+    for etype in data.edge_types:
+        print(f"  {etype}: {data[etype].edge_index.shape}")
+
+    print("\nLoading random split masks...")
+    train_mask, val_mask, test_mask = load_split_masks(week=2, split_type="random")
+    print(f"  train: {train_mask.sum().item()}  val: {val_mask.sum().item()}  test: {test_mask.sum().item()}")
+
+    # Build in_channels_dict from actual feature dimensions
+    in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
+    print(f"\nNode feature dims: {in_channels_dict}")
+
+    print("\nBuilding EnrollmentGNN...")
+    model = EnrollmentGNN(in_channels_dict=in_channels_dict, hidden_dim=64)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    print("\nRunning one forward pass (smoke test)...")
+    model.eval()
+    with torch.no_grad():
+        logits = model(data)
+    probs = torch.sigmoid(logits)
+    print(f"  logits shape: {logits.shape}  (expected: torch.Size([32593]))")
+    print(f"  probs range:  [{probs.min():.4f}, {probs.max():.4f}]")
+
+    print("\nRunning one training step...")
+    loss = train(model, data, train_mask, optimizer)
+    print(f"  Train loss: {loss:.4f}")
+
+    print("\nRunning multi-epoch training loop (5 epochs, patience=3)...")
+    y = data[("student", "enrolled_in", "course_presentation")].y
+    pos_weight = compute_pos_weight(train_mask, y)
+    best_val_auroc, best_epoch = run_training_loop(
+        model, data, train_mask, val_mask, optimizer,
+        max_epochs=5, patience=3, pos_weight=pos_weight
+    )
+    print(f"  Best val-AUROC: {best_val_auroc:.4f} at epoch {best_epoch}")
+
+    print("\nEvaluating on val and test sets...")
+    val_metrics = evaluate(model, data, val_mask, label="val")
+    test_metrics = evaluate(model, data, test_mask, label="test")
+
+    print("\nSmoke test complete.")
+    assert logits.shape == torch.Size([32593]), f"Unexpected logits shape: {logits.shape}"
+    print("[OK] logits shape is correct (32,593 enrollments)")

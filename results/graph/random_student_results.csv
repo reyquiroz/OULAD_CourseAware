@@ -1,0 +1,2 @@
+week,model,split,auroc,auprc,f1,precision,recall,balanced_acc,best_val_auroc,best_epoch
+8,EnrollmentGNN,random_student,0.7100204862829493,0.7797516612337925,0.0,0.0,0.0,0.5,0.7152369474229874,3
