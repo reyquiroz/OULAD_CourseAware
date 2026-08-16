@@ -93,7 +93,7 @@ the model.
 
 ## Sub-task 2 — Fix LCPO held-out edge masking to preserve cross-course student activity
 
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 ### Intent
 `_mask_held_out_edges()` currently removes all submitted and interacted_with edges for
@@ -143,7 +143,7 @@ Concretely:
 
 ## Sub-task 3 — Correct validation split isolation for LCPO and align GNN/LightGBM folds
 
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 ### Intent
 The current LCPO loop draws the validation subset randomly from the full non-test
@@ -187,7 +187,7 @@ random-student split parquet that the GNN uses, ensuring identical folds.
 
 ## Sub-task 4 — Add training diagnostics: overfit check, loss curves, threshold tuning, weighted vs. unweighted comparison
 
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 ### Intent
 Before trusting test-set numbers, we need to know whether the model can fit the
@@ -233,7 +233,7 @@ data-driven threshold rather than the hard-coded 0.5.
 
 ## Sub-task 5 — Complete reproducible LCPO comparison with multiple seeds and full metrics
 
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 ### Intent
 A single-seed, single-run result is not sufficient for a reproducible comparison.
@@ -274,7 +274,7 @@ can be directly compared.
 
 ## Sub-task 6 — Add tests for graph loader, edge-feature use, split isolation, and prediction alignment
 
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 ### Intent
 The existing tests cover split utilities and temporal filtering but not the GNN-specific
