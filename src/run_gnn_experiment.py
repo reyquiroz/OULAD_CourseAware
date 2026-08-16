@@ -29,7 +29,9 @@ from gnn_model import (
     compute_metrics,
     compute_pos_weight,
     load_split_masks,
+    run_overfit_check,
     run_training_loop,
+    select_threshold,
 )
 
 # ---------------------------------------------------------------------------
@@ -50,7 +52,13 @@ HIDDEN_DIM = 64
 def _build_model_and_optimizer(data):
     """Construct a fresh EnrollmentGNN and Adam optimizer."""
     in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
-    model = EnrollmentGNN(in_channels_dict=in_channels_dict, hidden_dim=HIDDEN_DIM)
+    ei_key = ("student", "enrolled_in", "course_presentation")
+    n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
+    model = EnrollmentGNN(
+        in_channels_dict=in_channels_dict,
+        hidden_dim=HIDDEN_DIM,
+        n_enrolled_in_attr=n_enrolled_in_attr,
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     return model, optimizer
 
@@ -70,7 +78,7 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
     """Return a deep copy of *data* with held-out course edges removed.
 
     Removes from the training graph all edges whose source or destination belongs
-    to the held-out course_presentation node or to held-out students.
+    to the held-out course_presentation node, its assessments, or its VLE resources.
 
     The course_presentation *node* itself is kept (so the model can use its
     features at inference time), but every edge that would leak held-out course
@@ -80,17 +88,6 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
 
     # --- Deep-copy first so we never mutate the caller's graph ---
     masked = _copy.deepcopy(data)
-
-    # --- Identify held-out student node indices from enrolled_in edge parquet ---
-    # enrolled_in parquet rows align 1-to-1 with enrollments.parquet rows
-    ei_df = pd.read_parquet(
-        os.path.join(ARTIFACT_DIR, f"week{data._held_out_week:02d}_edges_enrolled_in.parquet")
-    )
-    ho_student_mask = (
-        (enroll_df["code_module"] == held_out_module)
-        & (enroll_df["code_presentation"] == held_out_pres)
-    )
-    ho_student_node_indices = set(ei_df.loc[ho_student_mask, "src"].tolist())
 
     # Helper: mutate an edge store in-place (deepcopy already owns it)
     def _filter_edge(store, keep_mask, has_attr=False, has_y=False, has_enroll_idx=False):
@@ -108,9 +105,13 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
     # so its length must equal the full enrollment count (32,593) to keep train/test
     # mask alignment.  Information leakage from held-out enrollment features is
     # blocked by the train_mask (held-out rows are False in train_mask, so no
-    # gradient flows through their loss).  The auxiliary edges below (submitted,
-    # interacted_with, contains_assess, has_resource) are the real leakage vectors
-    # and are filtered here.
+    # gradient flows through their loss).
+    #
+    # submitted / interacted_with are filtered by *destination* node (assessment or
+    # vle_resource belonging to the held-out CP), NOT by source student.  This
+    # preserves cross-course behavioral signal for students enrolled in multiple
+    # courses — only their activity that specifically belongs to the held-out CP is
+    # removed from message-passing.
 
     # 2. contains_assess / rev_contains_assess — filter by CP src/dst
     ca_key = ("course_presentation", "contains_assess", "assessment")
@@ -138,43 +139,69 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
             keep_rev_hr = (rev_hr_store.edge_index[1] != cp_node_idx)
             _filter_edge(rev_hr_store, keep_rev_hr)
 
-    # 4. submitted / rev_submitted — filter by held-out student src/dst
+    # 4. submitted / rev_submitted — filter by held-out CP's assessment nodes
+    #    Build the set of assessment node indices that belong to the held-out CP by
+    #    reading the original (pre-copy) contains_assess edges.  Only edges whose
+    #    destination assessment is in that set are removed; cross-course submissions
+    #    by the same student are preserved.
     sub_key = ("student", "submitted", "assessment")
-    if sub_key in masked.edge_types and len(ho_student_node_indices) > 0:
-        sub_store = masked[sub_key]
-        keep_sub = torch.tensor(
-            [s.item() not in ho_student_node_indices for s in sub_store.edge_index[0]],
-            dtype=torch.bool,
-        )
-        _filter_edge(sub_store, keep_sub, has_attr=True)
+    ca_key_check = ("course_presentation", "contains_assess", "assessment")
+    if sub_key in masked.edge_types:
+        if ca_key_check in data.edge_types:
+            ca_ei = data[ca_key_check].edge_index
+            ho_assess_node_indices = set(
+                ca_ei[1][ca_ei[0] == cp_node_idx].tolist()
+            )
+        else:
+            ho_assess_node_indices = set()
 
-        rev_sub_key = ("assessment", "rev_submitted", "student")
-        if rev_sub_key in masked.edge_types:
-            rev_sub_store = masked[rev_sub_key]
-            keep_rev_sub = torch.tensor(
-                [d.item() not in ho_student_node_indices for d in rev_sub_store.edge_index[1]],
+        if ho_assess_node_indices:
+            sub_store = masked[sub_key]
+            keep_sub = torch.tensor(
+                [d.item() not in ho_assess_node_indices for d in sub_store.edge_index[1]],
                 dtype=torch.bool,
             )
-            _filter_edge(rev_sub_store, keep_rev_sub)
+            _filter_edge(sub_store, keep_sub, has_attr=True)
 
-    # 5. interacted_with / rev_interacted_with — filter by held-out student src/dst
+            rev_sub_key = ("assessment", "rev_submitted", "student")
+            if rev_sub_key in masked.edge_types:
+                rev_sub_store = masked[rev_sub_key]
+                keep_rev_sub = torch.tensor(
+                    [s.item() not in ho_assess_node_indices for s in rev_sub_store.edge_index[0]],
+                    dtype=torch.bool,
+                )
+                _filter_edge(rev_sub_store, keep_rev_sub)
+
+    # 5. interacted_with / rev_interacted_with — filter by held-out CP's vle_resource nodes
+    #    Build the set of vle_resource node indices that belong to the held-out CP via
+    #    has_resource edges.  Cross-course VLE interactions by the same student are kept.
     iw_key = ("student", "interacted_with", "vle_resource")
-    if iw_key in masked.edge_types and len(ho_student_node_indices) > 0:
-        iw_store = masked[iw_key]
-        keep_iw = torch.tensor(
-            [s.item() not in ho_student_node_indices for s in iw_store.edge_index[0]],
-            dtype=torch.bool,
-        )
-        _filter_edge(iw_store, keep_iw, has_attr=True)
+    hr_key_check = ("course_presentation", "has_resource", "vle_resource")
+    if iw_key in masked.edge_types:
+        if hr_key_check in data.edge_types:
+            hr_ei = data[hr_key_check].edge_index
+            ho_vle_node_indices = set(
+                hr_ei[1][hr_ei[0] == cp_node_idx].tolist()
+            )
+        else:
+            ho_vle_node_indices = set()
 
-        rev_iw_key = ("vle_resource", "rev_interacted_with", "student")
-        if rev_iw_key in masked.edge_types:
-            rev_iw_store = masked[rev_iw_key]
-            keep_rev_iw = torch.tensor(
-                [d.item() not in ho_student_node_indices for d in rev_iw_store.edge_index[1]],
+        if ho_vle_node_indices:
+            iw_store = masked[iw_key]
+            keep_iw = torch.tensor(
+                [d.item() not in ho_vle_node_indices for d in iw_store.edge_index[1]],
                 dtype=torch.bool,
             )
-            _filter_edge(rev_iw_store, keep_rev_iw)
+            _filter_edge(iw_store, keep_iw, has_attr=True)
+
+            rev_iw_key = ("vle_resource", "rev_interacted_with", "student")
+            if rev_iw_key in masked.edge_types:
+                rev_iw_store = masked[rev_iw_key]
+                keep_rev_iw = torch.tensor(
+                    [s.item() not in ho_vle_node_indices for s in rev_iw_store.edge_index[0]],
+                    dtype=torch.bool,
+                )
+                _filter_edge(rev_iw_store, keep_rev_iw)
 
     return masked
 
@@ -183,28 +210,56 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
 # Experiment 1: Random-student split
 # ---------------------------------------------------------------------------
 
-def run_random_split_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, patience: int = PATIENCE):
-    """Train and evaluate EnrollmentGNN on the pre-saved 70/10/20 random split."""
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
+def run_random_split_experiment(
+    week: int = DEFAULT_WEEK,
+    max_epochs: int = MAX_EPOCHS,
+    patience: int = PATIENCE,
+    weighted: bool = True,
+    seed: int = SEED,
+):
+    """Train and evaluate EnrollmentGNN on a 70/10/20 random-student split.
 
-    print(f"\n=== Random-split experiment  (week {week:02d}) ===")
+    Parameters
+    ----------
+    weighted : bool
+        If True (default), use class-weighted BCE loss (pos_weight computed
+        from training labels).  If False, use unweighted BCE loss.
+    seed : int
+        Random seed used to draw the student split.  Passed to
+        ``random_student_split()`` so different seeds produce independent
+        partitions.  Defaults to the global SEED constant.
+    """
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    loss_weighting = "weighted" if weighted else "unweighted"
+    print(f"\n=== Random-split experiment  (week {week:02d}, {loss_weighting}, seed {seed}) ===")
 
     # Load graph
     data = GraphDataLoader(week).load()
 
-    # Load pre-saved masks (train 70%, val 10%, test 20%)
-    train_mask, val_mask, test_mask = load_split_masks(week, split_type="random")
+    # Build split masks for this seed using random_student_split()
+    from oulad_data import random_student_split as _random_student_split
+    _enroll_df = pd.read_parquet(
+        os.path.join(ARTIFACT_DIR, f"week{week:02d}_enrollments.parquet")
+    )
+    _train_s, _val_s, _test_s = _random_student_split(_enroll_df, seed=seed)
+    train_mask = torch.tensor(_train_s.values, dtype=torch.bool)
+    val_mask   = torch.tensor(_val_s.values,   dtype=torch.bool)
+    test_mask  = torch.tensor(_test_s.values,  dtype=torch.bool)
 
-    # Class-weighting
+    # Class-weighting (or None for unweighted run)
     y = data[("student", "enrolled_in", "course_presentation")].y
-    pos_weight = compute_pos_weight(train_mask, y)
+    if weighted:
+        pos_weight = compute_pos_weight(train_mask, y)
+    else:
+        pos_weight = False  # sentinel: triggers plain BCEWithLogitsLoss()
 
     # Model + optimizer
     model, optimizer = _build_model_and_optimizer(data)
 
-    # Training
-    best_val_auroc, best_epoch = run_training_loop(
+    # Training — captures per-epoch curves
+    best_val_auroc, best_epoch, train_losses, val_aurocs = run_training_loop(
         model, data, train_mask, val_mask, optimizer,
         max_epochs=max_epochs,
         patience=patience,
@@ -212,14 +267,29 @@ def run_random_split_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_
     )
     print(f"  best_val_auroc={best_val_auroc:.4f}  best_epoch={best_epoch}")
 
-    # Test evaluation
+    # Save per-epoch loss curves
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    curves_path = os.path.join(RESULTS_DIR, f"training_curves_random_student_{loss_weighting}.npz")
+    np.savez(curves_path, train_losses=np.array(train_losses), val_aurocs=np.array(val_aurocs))
+    print(f"  Loss curves → {curves_path}")
+
+    # Threshold tuning on validation set
+    val_probs, val_labels = _infer_probs(model, data, val_mask)
+    best_threshold = 0.5
+    if val_labels.sum() > 0 and (1 - val_labels).sum() > 0:
+        best_threshold = select_threshold(val_probs, val_labels)
+    print(f"  best_threshold={best_threshold:.2f}")
+
+    # Test evaluation using tuned threshold
     probs, labels = _infer_probs(model, data, test_mask)
-    metrics = compute_metrics(probs, labels)
+    metrics = compute_metrics(probs, labels, threshold=best_threshold)
 
     row = {
         "week": week,
+        "seed": seed,
         "model": "EnrollmentGNN",
         "split": "random_student",
+        "loss_weighting": loss_weighting,
         "auroc": metrics["auroc"],
         "auprc": metrics["auprc"],
         "f1": metrics["f1"],
@@ -228,14 +298,10 @@ def run_random_split_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_
         "balanced_acc": metrics["balanced_acc"],
         "best_val_auroc": best_val_auroc,
         "best_epoch": best_epoch,
+        "best_threshold": best_threshold,
     }
 
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
-    pd.DataFrame([row]).to_csv(out_path, index=False)
-    print(f"  Saved → {out_path}")
-
-    return metrics
+    return row, metrics
 
 
 # ---------------------------------------------------------------------------
@@ -296,18 +362,14 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         test_mask_np = ho_rows.values
         train_all_np = ~test_mask_np
 
-        # 10% of training rows → small validation set for early stopping
-        train_indices = np.where(train_all_np)[0]
+        # 10% of non-test students → validation set for early stopping
+        train_student_ids = enroll_df.loc[train_all_np, "id_student"].unique()
         rng = np.random.default_rng(SEED + fold_idx)
-        val_size = max(1, int(0.10 * len(train_indices)))
-        val_indices = rng.choice(train_indices, size=val_size, replace=False)
-        val_set = set(val_indices.tolist())
+        val_size = max(1, int(0.10 * len(train_student_ids)))
+        val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
 
-        train_mask_np = train_all_np.copy()
-        val_mask_np = np.zeros(n_enrollments, dtype=bool)
-        for vi in val_indices:
-            train_mask_np[vi] = False
-            val_mask_np[vi] = True
+        val_mask_np = train_all_np & enroll_df["id_student"].isin(val_student_ids).to_numpy()
+        train_mask_np = train_all_np & ~val_mask_np
 
         train_mask = torch.tensor(train_mask_np, dtype=torch.bool)
         val_mask = torch.tensor(val_mask_np, dtype=torch.bool)
@@ -327,7 +389,7 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         y = data_masked[("student", "enrolled_in", "course_presentation")].y
         pos_weight = compute_pos_weight(train_mask, y)
 
-        best_val_auroc, best_epoch = run_training_loop(
+        best_val_auroc, best_epoch, _train_losses, _val_aurocs = run_training_loop(
             model, data_masked, train_mask, val_mask, optimizer,
             max_epochs=max_epochs,
             patience=patience,
@@ -422,16 +484,46 @@ if __name__ == "__main__":
                         help="Quick mode: MAX_EPOCHS=5, PATIENCE=3, first 2 LCPO folds only")
     parser.add_argument("--random-only", action="store_true",
                         help="Skip LCPO; run only the random-student experiment")
+    parser.add_argument("--overfit-check", action="store_true",
+                        help="Run overfit sanity check before the main experiment and print result")
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42],
+                        help="One or more random seeds for the random-student split experiment "
+                             "(default: 42).  Each seed produces an independent train/val/test "
+                             "partition; rows are accumulated and written together.")
     args = parser.parse_args()
 
     epochs = 5 if args.quick else MAX_EPOCHS
     pat = 3 if args.quick else PATIENCE
+    # --quick limits LCPO to 2 folds; a production run uses all folds (max_folds=None)
     max_folds = 2 if args.quick else None
 
     random_metrics = None
     lcpo_df = None
 
-    random_metrics = run_random_split_experiment(week=args.week, max_epochs=epochs, patience=pat)
+    # --- Optional overfit check ---
+    if args.overfit_check:
+        print("\n=== Overfit check ===")
+        data_for_check = GraphDataLoader(args.week).load()
+        train_mask_check, _, _ = load_split_masks(args.week, split_type="random")
+        check_loss = run_overfit_check(data_for_check, train_mask_check)
+        print(f"  Overfit check final loss: {check_loss:.4f}")
+
+    # --- Random-student experiment: loop over (seed × weighted/unweighted) ---
+    rows = []
+    for seed_val in args.seeds:
+        for weighted_flag in (True, False):
+            row, metrics = run_random_split_experiment(
+                week=args.week, max_epochs=epochs, patience=pat,
+                weighted=weighted_flag, seed=seed_val,
+            )
+            rows.append(row)
+            if weighted_flag and seed_val == args.seeds[0]:
+                random_metrics = metrics  # used for _print_summary (first seed, weighted)
+
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    print(f"\n  Saved {len(rows)} rows ({len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
 
     if not args.random_only:
         lcpo_df = run_lcpo_experiment(week=args.week, max_epochs=epochs, patience=pat, max_folds=max_folds)

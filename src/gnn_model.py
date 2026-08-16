@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import HeteroConv, SAGEConv
+from torch_geometric.utils import scatter as pyg_scatter
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -44,6 +45,68 @@ def _onehot(series: pd.Series) -> torch.Tensor:
 
 def _numeric(series: pd.Series) -> torch.Tensor:
     return torch.tensor(series.fillna(0).values, dtype=torch.float32).unsqueeze(1)
+
+
+# ---------------------------------------------------------------------------
+# Feature normalization
+# ---------------------------------------------------------------------------
+
+def _normalize_numeric_features(data: HeteroData) -> HeteroData:
+    """Standardize numeric columns in node and edge feature tensors in-place.
+
+    One-hot columns (all values in {0, 1} with at most 2 unique values per
+    column) are left untouched.  For total_clicks and n_interactions a log1p
+    transform is applied before standardizing.
+
+    Means and stds are computed over the full graph (not per split).
+    Columns with zero variance are left as-is (already constant).
+    """
+    # log1p column name → index mapping is built per tensor, so we identify
+    # them by matching the order they were concatenated in load().
+    # For interacted_with edge attrs the columns are:
+    #   [total_clicks, n_interactions, first_day, last_day, active_days]
+    #   indices         0               1
+    IW_LOG1P_COLS = {0, 1}  # total_clicks, n_interactions
+
+    def _is_onehot_col(col: torch.Tensor) -> bool:
+        """True if every value is 0 or 1 and there are at most 2 unique values."""
+        unique_vals = col.unique()
+        if unique_vals.numel() > 2:
+            return False
+        return bool(((unique_vals == 0) | (unique_vals == 1)).all())
+
+    def _standardize(tensor: torch.Tensor, log1p_col_indices: set = None) -> torch.Tensor:
+        """Return a copy of tensor with numeric columns standardized."""
+        tensor = tensor.clone()
+        n_cols = tensor.shape[1]
+        for c in range(n_cols):
+            col = tensor[:, c]
+            if _is_onehot_col(col):
+                continue
+            if log1p_col_indices and c in log1p_col_indices:
+                col = torch.log1p(col.clamp(min=0.0))
+            mean = col.mean()
+            std = col.std(unbiased=False)
+            if std.item() == 0.0:
+                tensor[:, c] = 0.0
+            else:
+                tensor[:, c] = (col - mean) / std
+        return tensor
+
+    # Node features
+    for ntype in data.node_types:
+        store = data[ntype]
+        if hasattr(store, "x") and store.x is not None and store.x.numel() > 0 and store.x.shape[1] > 0:
+            store.x = _standardize(store.x)
+
+    # Edge features
+    for etype in data.edge_types:
+        store = data[etype]
+        if hasattr(store, "edge_attr") and store.edge_attr is not None and store.edge_attr.numel() > 0:
+            log1p_cols = IW_LOG1P_COLS if etype == ("student", "interacted_with", "vle_resource") else None
+            store.edge_attr = _standardize(store.edge_attr, log1p_col_indices=log1p_cols)
+
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +265,7 @@ class GraphDataLoader:
             np.stack([iw["dst"].values, iw["src"].values], axis=0), dtype=torch.long
         )
 
+        data = _normalize_numeric_features(data)
         return data
 
 
@@ -263,7 +327,7 @@ class EnrollmentGNN(nn.Module):
     - Linear output head → scalar logit → sigmoid → at-risk probability
     """
 
-    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1):
+    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1, n_enrolled_in_attr: int = 0):
         super().__init__()
         torch.manual_seed(SEED)
 
@@ -304,6 +368,10 @@ class EnrollmentGNN(nn.Module):
 
         self.act = nn.ReLU()
 
+        # Projects enrolled_in edge attributes into hidden_dim space so they can
+        # be added to student representations between layer 1 and layer 2.
+        self.enrollment_attr_proj = nn.Linear(n_enrolled_in_attr, hidden_dim) if n_enrolled_in_attr > 0 else None
+
         # Edge-level prediction head: concat student + course_presentation embeddings
         self.edge_head = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
@@ -338,6 +406,18 @@ class EnrollmentGNN(nn.Module):
         h_dict = self.conv1(x_dict, ei_dict_1)
         h_dict = {k: self.act(v) for k, v in h_dict.items()}
         h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
+
+        # --- Inject enrollment edge attributes between layer 1 and layer 2 ---
+        if self.enrollment_attr_proj is not None:
+            ei_key = ("student", "enrolled_in", "course_presentation")
+            ei_attr = data[ei_key].edge_attr          # (E, n_enrolled_in_attr)
+            src_idx = data[ei_key].edge_index[0]      # (E,) student node indices
+            proj = self.enrollment_attr_proj(ei_attr)  # (E, hidden_dim)
+            n_students = h_dict["student"].size(0)
+            enrollment_proj = pyg_scatter(
+                proj, src_idx, dim=0, dim_size=n_students, reduce="mean"
+            )  # (N_student, hidden_dim)
+            h_dict["student"] = h_dict["student"] + enrollment_proj
 
         ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
         h_dict = self.conv2(h_dict, ei_dict_2)
@@ -400,42 +480,69 @@ def run_training_loop(
     pos_weight: torch.Tensor = None,
 ) -> tuple:
     """Multi-epoch training loop with early stopping and class weighting.
-    
-    Returns (best_val_auroc, best_epoch).
+
+    Parameters
+    ----------
+    pos_weight : torch.Tensor or None
+        If None, computes pos_weight from the training labels (weighted loss).
+        Pass ``torch.tensor([1.0])`` or use the sentinel ``False`` via the
+        caller to disable weighting entirely — but the cleaner API is to pass
+        ``pos_weight=None`` and let the function compute it, or to pass a
+        pre-computed tensor.  To run *unweighted*, pass the string sentinel by
+        setting pos_weight to the special value ``"none"`` (handled below).
+
+    Returns
+    -------
+    tuple: (best_val_auroc, best_epoch, train_losses, val_aurocs)
+        train_losses : list[float] — train BCE loss per epoch
+        val_aurocs   : list[float] — val AUROC per epoch (float('nan') when
+                       validation set has only one class)
     """
     torch.manual_seed(SEED)
     np.random.seed(SEED)
-    
+
+    y = data[("student", "enrolled_in", "course_presentation")].y
+
     if pos_weight is None:
-        y = data[("student", "enrolled_in", "course_presentation")].y
-        pos_weight = compute_pos_weight(train_mask, y)
-    
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    
+        # Weighted loss: compute class-imbalance weight from training labels
+        _pw = compute_pos_weight(train_mask, y)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=_pw)
+    else:
+        # Unweighted loss: caller explicitly passed pos_weight=False/tensor([1.])
+        # Use plain BCE with no pos_weight argument when caller passes False.
+        if pos_weight is False:
+            loss_fn = nn.BCEWithLogitsLoss()
+        else:
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
     best_val_auroc = -1
     best_epoch = -1
     best_state_dict = None
     epochs_no_improve = 0
-    
+
+    train_losses: list = []
+    val_aurocs: list = []
+
     for epoch in range(max_epochs):
         model.train()
         optimizer.zero_grad()
         logits = model(data)
-        y = data[("student", "enrolled_in", "course_presentation")].y
         loss = loss_fn(logits[train_mask], y[train_mask])
         loss.backward()
         optimizer.step()
-        
+        train_losses.append(loss.item())
+
         # Evaluate on validation set (no print to avoid clutter)
         model.eval()
         with torch.no_grad():
             logits_val = model(data)
         probs_val = torch.sigmoid(logits_val[val_mask]).cpu().numpy()
         labels_val = y[val_mask].cpu().numpy()
-        
+
         if labels_val.sum() > 0 and (1 - labels_val).sum() > 0:
             val_auroc = roc_auc_score(labels_val, probs_val)
-            
+            val_aurocs.append(val_auroc)
+
             if val_auroc > best_val_auroc:
                 best_val_auroc = val_auroc
                 best_epoch = epoch
@@ -443,34 +550,60 @@ def run_training_loop(
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
-            
+
             if epochs_no_improve >= patience:
                 break
-    
+        else:
+            val_aurocs.append(float("nan"))
+
     # Restore best state dict
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
-    
-    return best_val_auroc, best_epoch
+
+    return best_val_auroc, best_epoch, train_losses, val_aurocs
 
 
-def compute_metrics(probs: np.ndarray, labels: np.ndarray) -> dict:
+def select_threshold(probs: np.ndarray, labels: np.ndarray) -> float:
+    """Select classification threshold maximizing F1 on provided probs/labels.
+
+    Sweeps thresholds from 0.05 to 0.95 in steps of 0.05.
+    Returns the threshold with the highest F1 score.
+    Falls back to 0.5 if all candidates produce degenerate predictions.
+    """
+    best_thresh = 0.5
+    best_f1 = -1.0
+    candidates = np.arange(0.05, 1.00, 0.05)
+    for t in candidates:
+        preds = (probs >= t).astype(int)
+        # Skip degenerate case (all one class predicted)
+        if preds.sum() == 0 or (1 - preds).sum() == 0:
+            continue
+        score = f1_score(labels, preds, zero_division=0)
+        if score > best_f1:
+            best_f1 = score
+            best_thresh = float(t)
+    return best_thresh
+
+
+def compute_metrics(probs: np.ndarray, labels: np.ndarray, threshold: float = 0.5) -> dict:
     """Compute full metrics dict from probabilities and labels.
-    
+
     Parameters
     ----------
     probs : np.ndarray
         Predicted probabilities (shape (n,))
     labels : np.ndarray
         True labels (shape (n,))
-    
+    threshold : float, optional
+        Classification threshold (default 0.5).  Pass the output of
+        ``select_threshold()`` for data-driven threshold selection.
+
     Returns
     -------
     dict with keys: auroc, auprc, f1, precision, recall, balanced_acc
     """
-    threshold = 0.5
     predictions = (probs >= threshold).astype(int)
-    
+
     metrics = {
         "auroc": roc_auc_score(labels, probs),
         "auprc": average_precision_score(labels, probs),
@@ -503,6 +636,76 @@ def evaluate(
     metrics = compute_metrics(probs, labels)
     print(f"[{label}] Metrics: {metrics}")
     return metrics
+
+
+def run_overfit_check(
+    data: HeteroData,
+    train_mask: torch.Tensor,
+    n_samples: int = 128,
+    max_epochs: int = 200,
+) -> float:
+    """Verify the model can overfit a small subset of training data.
+
+    Selects the first ``n_samples`` True positions from ``train_mask``, trains
+    a fresh EnrollmentGNN to convergence on just those examples, and returns
+    the final train loss.  Prints a warning if the final loss exceeds 0.1.
+
+    Parameters
+    ----------
+    data        : full HeteroData graph
+    train_mask  : boolean mask over enrolled_in edges (full length)
+    n_samples   : how many training examples to use (default 128)
+    max_epochs  : maximum training epochs (default 200)
+
+    Returns
+    -------
+    float : final (last-epoch) training loss on the subset
+    """
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+
+    # Build a tiny mask using the first n_samples True positions
+    true_positions = train_mask.nonzero(as_tuple=True)[0][:n_samples]
+    tiny_mask = torch.zeros_like(train_mask, dtype=torch.bool)
+    tiny_mask[true_positions] = True
+
+    # Use an empty val mask (we only care about train loss here)
+    empty_val = torch.zeros_like(train_mask, dtype=torch.bool)
+
+    # Build a fresh model — same architecture as the main experiment
+    in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
+    ei_key = ("student", "enrolled_in", "course_presentation")
+    n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
+    model = EnrollmentGNN(
+        in_channels_dict=in_channels_dict,
+        hidden_dim=64,
+        n_enrolled_in_attr=n_enrolled_in_attr,
+    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    y = data[ei_key].y
+    pos_weight = compute_pos_weight(tiny_mask, y)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    final_loss = float("nan")
+    for _ in range(max_epochs):
+        model.train()
+        optimizer.zero_grad()
+        logits = model(data)
+        loss = loss_fn(logits[tiny_mask], y[tiny_mask])
+        loss.backward()
+        optimizer.step()
+        final_loss = loss.item()
+
+    if final_loss > 0.1:
+        print(
+            f"[overfit_check] WARNING: final train loss {final_loss:.4f} > 0.1 — "
+            "model may not be fitting the training data."
+        )
+    else:
+        print(f"[overfit_check] OK — final train loss {final_loss:.4f} (≤ 0.1)")
+
+    return final_loss
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,10 @@ prints and saves a Markdown comparison table.
 
 Usage
 -----
-    python src/compare_gnn_lgbm.py            # full run (all 22 LCPO folds)
-    python src/compare_gnn_lgbm.py --quick    # 2 LCPO folds, quick sanity check
-    python src/compare_gnn_lgbm.py --week 8   # explicit week (default: 8)
+    python src/compare_gnn_lgbm.py                    # full run (all 22 LCPO folds)
+    python src/compare_gnn_lgbm.py --quick            # 2 LCPO folds, quick sanity check
+    python src/compare_gnn_lgbm.py --week 8           # explicit week (default: 8)
+    python src/compare_gnn_lgbm.py --seeds 42 123 7   # multi-seed random split
 """
 
 import argparse
@@ -151,27 +152,41 @@ def _align_to_enrollments(df_features: pd.DataFrame, enrollments: pd.DataFrame) 
 # 3. LightGBM — random split
 # ---------------------------------------------------------------------------
 
-def run_lgbm_random_split(week: int = 8) -> dict:
-    """Train LightGBM on the saved 70/10/20 random-student split.
+def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
+    """Train LightGBM on a 70/10/20 random-student split.
 
-    Returns a metrics dict with lowercase keys: auroc, auprc, f1, precision,
-    recall, balanced_acc.
+    Parameters
+    ----------
+    week : int
+        Prediction week.
+    seed : int
+        Random seed used to draw the student split via ``random_student_split()``.
+        Mirrors the GNN's multi-seed protocol.
+
+    Returns
+    -------
+    dict
+        Metrics dict with lowercase keys: auroc, auprc, f1, precision,
+        recall, balanced_acc.
     """
-    split_path = _SPLITS_DIR / f"week{week:02d}" / "splits" / f"week{week:02d}_random_split.parquet"
-    split_df = pd.read_parquet(split_path)
-    # split_df columns: id_student, code_module, code_presentation,
-    #                   final_result, target, is_train, is_val, is_test
+    from oulad_data import random_student_split as _random_student_split
+
+    # Load enrollment table to derive split masks at this seed
+    enrollments_path = _ARTIFACTS_DIR / f"week{week:02d}_enrollments.parquet"
+    enrollments = pd.read_parquet(enrollments_path)
 
     X, y, df_full = build_tabular_features(week)
 
-    # Align the feature rows to the enrollment ordering in split_df
-    feat_pos = _align_to_enrollments(df_full, split_df)
+    # Align the feature rows to the canonical enrollment ordering
+    feat_pos = _align_to_enrollments(df_full, enrollments)
     X_aligned = X.iloc[feat_pos].reset_index(drop=True)
     y_aligned = y.iloc[feat_pos].reset_index(drop=True)
 
-    # Boolean masks (same length and order as split_df / aligned arrays)
-    train_mask = split_df["is_train"].values
-    test_mask = split_df["is_test"].values
+    # Derive per-seed masks using the same utility as the GNN
+    train_s, val_s, test_s = _random_student_split(enrollments, seed=seed)
+    # Match the GNN protocol: LightGBM trains on train+val, tests on test.
+    train_mask = (train_s | val_s).values
+    test_mask = test_s.values
 
     X_train, y_train = X_aligned[train_mask], y_aligned[train_mask]
     X_test, y_test = X_aligned[test_mask], y_aligned[test_mask]
@@ -283,7 +298,7 @@ def build_comparison_table(
     gnn_lcpo_summary: pd.DataFrame,
     lgbm_lcpo_summary: pd.DataFrame,
 ) -> str:
-    """Build a Markdown comparison table.
+    """Build the legacy single-row Markdown comparison table.
 
     Parameters
     ----------
@@ -334,6 +349,108 @@ def build_comparison_table(
     return "\n".join(lines)
 
 
+def build_combined_csv(
+    gnn_random_df: pd.DataFrame,
+    lgbm_random_rows: list[dict],
+    gnn_lcpo_df: pd.DataFrame,
+    lgbm_lcpo_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build a combined per-fold/per-seed results DataFrame.
+
+    Columns: model, split_type, fold_or_seed, held_out_module,
+             held_out_presentation, auroc, auprc, f1, precision, recall,
+             balanced_acc.
+    """
+    metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
+    records = []
+
+    # ---- GNN random rows (one per seed × loss_weighting) ----
+    for _, r in gnn_random_df.iterrows():
+        records.append({
+            "model": f"GNN ({r.get('loss_weighting', 'weighted')})",
+            "split_type": "random_student",
+            "fold_or_seed": r.get("seed", ""),
+            "held_out_module": "",
+            "held_out_presentation": "",
+            **{k: r.get(k, float("nan")) for k in metric_keys},
+        })
+
+    # ---- LightGBM random rows (one per seed) ----
+    for rec in lgbm_random_rows:
+        records.append({
+            "model": "LightGBM",
+            "split_type": "random_student",
+            "fold_or_seed": rec.get("seed", ""),
+            "held_out_module": "",
+            "held_out_presentation": "",
+            **{k: rec.get(k, float("nan")) for k in metric_keys},
+        })
+
+    # ---- GNN LCPO rows (one per fold) ----
+    for _, r in gnn_lcpo_df.iterrows():
+        records.append({
+            "model": "GNN",
+            "split_type": "lcpo",
+            "fold_or_seed": r.get("fold_idx", ""),
+            "held_out_module": r.get("held_out_module", ""),
+            "held_out_presentation": r.get("held_out_presentation", ""),
+            **{k: r.get(k, float("nan")) for k in metric_keys},
+        })
+
+    # ---- LightGBM LCPO rows (one per fold) ----
+    for _, r in lgbm_lcpo_df.iterrows():
+        records.append({
+            "model": "LightGBM",
+            "split_type": "lcpo",
+            "fold_or_seed": r.get("fold_idx", ""),
+            "held_out_module": r.get("held_out_module", ""),
+            "held_out_presentation": r.get("held_out_presentation", ""),
+            **{k: r.get(k, float("nan")) for k in metric_keys},
+        })
+
+    return pd.DataFrame(records)
+
+
+def build_summary_markdown(combined_df: pd.DataFrame) -> str:
+    """Build a Markdown summary with mean ± std per (model, split_type).
+
+    The table format mirrors the spec in Sub-task 5 of the improvement plan.
+    """
+    metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
+    header_labels = ["AUROC", "AUPRC", "F1", "Precision", "Recall", "Balanced Acc"]
+
+    def _fmt(vals: pd.Series) -> str:
+        mean = vals.mean()
+        std = vals.std(ddof=1) if len(vals) > 1 else float("nan")
+        if np.isnan(mean):
+            return "—"
+        if np.isnan(std):
+            return f"{mean:.3f}"
+        return f"{mean:.3f} ± {std:.3f}"
+
+    def _section(title: str, sub_df: pd.DataFrame) -> list[str]:
+        lines = [f"\n## {title}\n"]
+        col_header = "| Model | " + " | ".join(header_labels) + " |"
+        separator = "|-------|" + "|".join(["-------"] * len(header_labels)) + "|"
+        lines += [col_header, separator]
+        for model_name, grp in sub_df.groupby("model", sort=False):
+            cells = [_fmt(grp[k]) for k in metric_keys]
+            lines.append(f"| {model_name} | " + " | ".join(cells) + " |")
+        return lines
+
+    parts = ["# GNN vs LightGBM Comparison Summary\n"]
+
+    random_df = combined_df[combined_df["split_type"] == "random_student"]
+    lcpo_df = combined_df[combined_df["split_type"] == "lcpo"]
+
+    if not random_df.empty:
+        parts += _section("Random-student split", random_df)
+    if not lcpo_df.empty:
+        parts += _section("LCPO (Leave-Course-Presentation-Out)", lcpo_df)
+
+    return "\n".join(parts) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Shared metric computation
 # ---------------------------------------------------------------------------
@@ -354,54 +471,84 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray
 # 6. main()
 # ---------------------------------------------------------------------------
 
-def main(week: int = 8, quick: bool = False):
+def main(week: int = 8, quick: bool = False, seeds: list[int] | None = None):
+    if seeds is None:
+        seeds = [42]
     max_folds = 2 if quick else None
 
-    print(f"[compare_gnn_lgbm] week={week}, quick={quick}")
+    print(f"[compare_gnn_lgbm] week={week}, quick={quick}, seeds={seeds}")
 
-    # --- Load GNN results ---
+    # --- Load GNN results (written by run_gnn_experiment.py) ---
     gnn_random_path = _GRAPH_DIR / "random_student_results.csv"
-    gnn_lcpo_path = _GRAPH_DIR / "lcpo_summary.csv"
+    gnn_lcpo_path = _GRAPH_DIR / "lcpo_results.csv"
+    gnn_lcpo_summary_path = _GRAPH_DIR / "lcpo_summary.csv"
 
     gnn_random_df = pd.read_csv(gnn_random_path)
+
+    # Legacy single-row summary for the old comparison table
     gnn_random: dict = {}
     if not gnn_random_df.empty:
-        row = gnn_random_df.iloc[0]
-        gnn_random = {
-            "auroc": row.get("auroc", float("nan")),
-            "auprc": row.get("auprc", float("nan")),
-            "f1": row.get("f1", float("nan")),
-            "precision": row.get("precision", float("nan")),
-            "recall": row.get("recall", float("nan")),
-            "balanced_acc": row.get("balanced_acc", float("nan")),
-        }
+        # Use the first weighted row from the first seed for the legacy table
+        if "loss_weighting" in gnn_random_df.columns:
+            weighted_rows = gnn_random_df[gnn_random_df["loss_weighting"] == "weighted"]
+            ref_row = weighted_rows.iloc[0] if not weighted_rows.empty else gnn_random_df.iloc[0]
+        else:
+            ref_row = gnn_random_df.iloc[0]
+        gnn_random = {k: ref_row.get(k, float("nan"))
+                      for k in ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]}
 
-    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_path)
+    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
+    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path)
     # Columns: metric, mean, std, min, max
 
-    # --- Run LightGBM ---
-    print("[compare_gnn_lgbm] Running LightGBM random split …")
-    lgbm_random = run_lgbm_random_split(week=week)
-    print(f"  LightGBM random split AUROC: {lgbm_random['auroc']:.4f}")
+    # --- Run LightGBM random split (one run per seed) ---
+    lgbm_random_rows: list[dict] = []
+    for seed_val in seeds:
+        print(f"[compare_gnn_lgbm] Running LightGBM random split (seed={seed_val}) …")
+        metrics = run_lgbm_random_split(week=week, seed=seed_val)
+        lgbm_random_rows.append({"seed": seed_val, **metrics})
+        print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
 
+    # For legacy table: use mean across seeds
+    lgbm_random: dict = {}
+    if lgbm_random_rows:
+        metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
+        lgbm_random = {k: float(np.mean([r[k] for r in lgbm_random_rows])) for k in metric_keys}
+
+    # --- Run LightGBM LCPO ---
     print(f"[compare_gnn_lgbm] Running LightGBM LCPO ({max_folds or 22} folds) …")
     lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=week, max_folds=max_folds)
     print(f"  LightGBM LCPO mean AUROC: {lgbm_lcpo_summary[lgbm_lcpo_summary['metric']=='auroc']['mean'].values[0]:.4f}")
 
-    # --- Build comparison table ---
+    # --- Build legacy comparison table (gnn_vs_lgbm_comparison.md) ---
     table_md = build_comparison_table(
         gnn_random=gnn_random,
         lgbm_random=lgbm_random,
         gnn_lcpo_summary=gnn_lcpo_summary,
         lgbm_lcpo_summary=lgbm_lcpo_summary,
     )
-
-    # --- Save ---
     out_path = _GRAPH_DIR / "gnn_vs_lgbm_comparison.md"
     out_path.write_text(table_md + "\n")
-    print(f"\n[compare_gnn_lgbm] Comparison table saved to {out_path}\n")
-
+    print(f"\n[compare_gnn_lgbm] Comparison table saved to {out_path}")
     print(table_md)
+
+    # --- Build combined per-fold/per-seed CSV ---
+    combined_df = build_combined_csv(
+        gnn_random_df=gnn_random_df,
+        lgbm_random_rows=lgbm_random_rows,
+        gnn_lcpo_df=gnn_lcpo_df,
+        lgbm_lcpo_df=lgbm_fold_df,
+    )
+    combined_path = _GRAPH_DIR / "comparison_results.csv"
+    combined_df.to_csv(combined_path, index=False)
+    print(f"[compare_gnn_lgbm] Combined results CSV saved to {combined_path}")
+
+    # --- Build Markdown summary (comparison_summary.md) ---
+    summary_md = build_summary_markdown(combined_df)
+    summary_path = _GRAPH_DIR / "comparison_summary.md"
+    summary_path.write_text(summary_md)
+    print(f"[compare_gnn_lgbm] Summary Markdown saved to {summary_path}")
+    print(summary_md)
 
 
 # ---------------------------------------------------------------------------
@@ -420,5 +567,11 @@ if __name__ == "__main__":
         "--quick", action="store_true",
         help="Run only 2 LCPO folds for a fast smoke test.",
     )
+    parser.add_argument(
+        "--seeds", nargs="+", type=int, default=[42],
+        help="One or more random seeds for the LightGBM random-student split "
+             "(default: 42).  Mirrors the GNN's --seeds argument so both models "
+             "are evaluated on the same set of partitions.",
+    )
     args = parser.parse_args()
-    main(week=args.week, quick=args.quick)
+    main(week=args.week, quick=args.quick, seeds=args.seeds)
