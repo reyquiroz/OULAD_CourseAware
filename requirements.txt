@@ -21,15 +21,16 @@ joblib>=1.3.0,<2.0.0
 pyarrow>=14.0.0
 
 # Graph neural network dependencies (requires Python <=3.12)
-# Verified installed via PyTorch wheel index: torch 2.12.1, torch-geometric 2.8.0
+# Verified installed via pip show: torch 2.13.0, torch-geometric 2.8.0.post1
+# torch-scatter and torch-sparse are not installed in this environment.
 # Install command (CPU):
-#   pip install torch torch-geometric --index-url https://download.pytorch.org/whl/cpu
+#   pip install torch==2.13.0 torch-geometric==2.8.0.post1 --index-url https://download.pytorch.org/whl/cpu
 # Install command (CUDA 12.1):
-#   pip install torch torch-geometric --index-url https://download.pytorch.org/whl/cu121
+#   pip install torch==2.13.0 torch-geometric==2.8.0.post1 --index-url https://download.pytorch.org/whl/cu121
 # NOTE: plain `pip install -r requirements.txt` will attempt PyPI for these;
 #       use the index-url commands above for a working install.
-torch>=2.0.0
-torch-geometric>=2.3.0
+torch==2.13.0
+torch-geometric==2.8.0.post1
 
 # Jupyter notebook support
 jupyter>=1.0.0

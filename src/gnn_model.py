@@ -6,6 +6,7 @@
 
 import os
 import glob as _glob
+from typing import Optional
 import numpy as np
 import pandas as pd
 import torch
@@ -110,6 +111,73 @@ def _normalize_numeric_features(data: HeteroData) -> HeteroData:
 
 
 # ---------------------------------------------------------------------------
+# Feature-group ablation
+# ---------------------------------------------------------------------------
+
+# Maps condition name -> list of (store_type, store_key, col_slice_or_None)
+# col_slice=None means zero the entire tensor; a slice zeros only those columns.
+# store_type is "node" or "edge".
+FEATURE_GROUPS = {
+    "no_assessment": [
+        ("node",  "assessment",                           None),
+        ("edge",  ("student", "submitted", "assessment"), None),
+    ],
+    "no_vle": [
+        ("node",  "vle_resource",                                 None),
+        ("edge",  ("student", "interacted_with", "vle_resource"), None),
+    ],
+    "no_temporal": [
+        # interacted_with cols: [total_clicks(0), n_interactions(1), first_day(2), last_day(3), active_days(4)]
+        # temporal = first_day, last_day, active_days -> indices 2,3,4
+        ("edge",  ("student", "interacted_with", "vle_resource"), slice(2, 5)),
+        # assessment node cols after one-hot: last column is date (numeric, rightmost)
+        ("node",  "assessment",                                   slice(-1, None)),
+    ],
+    "no_course_features": [
+        ("node",  "course_presentation", None),
+    ],
+    "no_edge_attrs": [
+        ("edge",  ("student", "enrolled_in",    "course_presentation"), None),
+        ("edge",  ("student", "submitted",       "assessment"),          None),
+        ("edge",  ("student", "interacted_with", "vle_resource"),        None),
+    ],
+}
+
+
+def _apply_feature_mask(data: HeteroData, feature_mask: list) -> HeteroData:
+    """Zero out feature columns for the specified ablation conditions."""
+    for condition in feature_mask:
+        if condition not in FEATURE_GROUPS:
+            raise ValueError(
+                f"Unknown ablation condition: {condition!r}. "
+                f"Valid: {list(FEATURE_GROUPS.keys())}"
+            )
+        for store_type, key, col_slice in FEATURE_GROUPS[condition]:
+            if store_type == "node":
+                store = data[key]
+                if hasattr(store, "x") and store.x is not None and store.x.numel() > 0:
+                    if col_slice is None:
+                        store.x = torch.zeros_like(store.x)
+                    else:
+                        store.x = store.x.clone()
+                        store.x[:, col_slice] = 0.0
+            elif store_type == "edge":
+                if key in data.edge_types:
+                    store = data[key]
+                    if (
+                        hasattr(store, "edge_attr")
+                        and store.edge_attr is not None
+                        and store.edge_attr.numel() > 0
+                    ):
+                        if col_slice is None:
+                            store.edge_attr = torch.zeros_like(store.edge_attr)
+                        else:
+                            store.edge_attr = store.edge_attr.clone()
+                            store.edge_attr[:, col_slice] = 0.0
+    return data
+
+
+# ---------------------------------------------------------------------------
 # GraphDataLoader
 # ---------------------------------------------------------------------------
 
@@ -129,9 +197,10 @@ class GraphDataLoader:
       load_split_masks to align the split file to edges.
     """
 
-    def __init__(self, week: int, artifact_dir: str = ARTIFACT_DIR):
+    def __init__(self, week: int, artifact_dir: str = ARTIFACT_DIR, feature_mask: Optional[list] = None):
         self.week = week
         self.prefix = os.path.join(artifact_dir, f"week{week:02d}")
+        self._feature_mask = feature_mask
 
     def _path(self, suffix: str) -> str:
         return f"{self.prefix}_{suffix}.parquet"
@@ -266,6 +335,8 @@ class GraphDataLoader:
         )
 
         data = _normalize_numeric_features(data)
+        if self._feature_mask:
+            data = _apply_feature_mask(data, self._feature_mask)
         return data
 
 
@@ -327,7 +398,7 @@ class EnrollmentGNN(nn.Module):
     - Linear output head → scalar logit → sigmoid → at-risk probability
     """
 
-    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1, n_enrolled_in_attr: int = 0):
+    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1, n_enrolled_in_attr: int = 0, n_submitted_attr: int = 0, n_interacted_with_attr: int = 0):
         super().__init__()
         torch.manual_seed(SEED)
 
@@ -371,6 +442,10 @@ class EnrollmentGNN(nn.Module):
         # Projects enrolled_in edge attributes into hidden_dim space so they can
         # be added to student representations between layer 1 and layer 2.
         self.enrollment_attr_proj = nn.Linear(n_enrolled_in_attr, hidden_dim) if n_enrolled_in_attr > 0 else None
+
+        # Projects submitted / interacted_with edge attributes into hidden_dim space.
+        self.submitted_attr_proj = nn.Linear(n_submitted_attr, hidden_dim) if n_submitted_attr > 0 else None
+        self.interacted_with_attr_proj = nn.Linear(n_interacted_with_attr, hidden_dim) if n_interacted_with_attr > 0 else None
 
         # Edge-level prediction head: concat student + course_presentation embeddings
         self.edge_head = nn.Sequential(
@@ -418,6 +493,28 @@ class EnrollmentGNN(nn.Module):
                 proj, src_idx, dim=0, dim_size=n_students, reduce="mean"
             )  # (N_student, hidden_dim)
             h_dict["student"] = h_dict["student"] + enrollment_proj
+
+        # --- Inject submitted edge attributes between layer 1 and layer 2 ---
+        if self.submitted_attr_proj is not None:
+            sub_key = ("student", "submitted", "assessment")
+            if sub_key in data.edge_types and data[sub_key].edge_attr is not None:
+                sub_attr = data[sub_key].edge_attr          # (E_sub, n_submitted_attr)
+                sub_src = data[sub_key].edge_index[0]       # student node indices
+                sub_proj = self.submitted_attr_proj(sub_attr)  # (E_sub, hidden_dim)
+                n_students = h_dict["student"].size(0)
+                sub_agg = pyg_scatter(sub_proj, sub_src, dim=0, dim_size=n_students, reduce="mean")
+                h_dict["student"] = h_dict["student"] + sub_agg
+
+        # --- Inject interacted_with edge attributes between layer 1 and layer 2 ---
+        if self.interacted_with_attr_proj is not None:
+            iw_key = ("student", "interacted_with", "vle_resource")
+            if iw_key in data.edge_types and data[iw_key].edge_attr is not None:
+                iw_attr = data[iw_key].edge_attr            # (E_iw, n_interacted_with_attr)
+                iw_src = data[iw_key].edge_index[0]         # student node indices
+                iw_proj = self.interacted_with_attr_proj(iw_attr)  # (E_iw, hidden_dim)
+                n_students = h_dict["student"].size(0)
+                iw_agg = pyg_scatter(iw_proj, iw_src, dim=0, dim_size=n_students, reduce="mean")
+                h_dict["student"] = h_dict["student"] + iw_agg
 
         ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
         h_dict = self.conv2(h_dict, ei_dict_2)

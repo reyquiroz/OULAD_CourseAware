@@ -54,10 +54,27 @@ def _build_model_and_optimizer(data):
     in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
     ei_key = ("student", "enrolled_in", "course_presentation")
     n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
+
+    sub_key = ("student", "submitted", "assessment")
+    n_submitted_attr = (
+        data[sub_key].edge_attr.shape[1]
+        if sub_key in data.edge_types and data[sub_key].get("edge_attr") is not None
+        else 0
+    )
+
+    iw_key = ("student", "interacted_with", "vle_resource")
+    n_interacted_with_attr = (
+        data[iw_key].edge_attr.shape[1]
+        if iw_key in data.edge_types and data[iw_key].get("edge_attr") is not None
+        else 0
+    )
+
     model = EnrollmentGNN(
         in_channels_dict=in_channels_dict,
         hidden_dim=HIDDEN_DIM,
         n_enrolled_in_attr=n_enrolled_in_attr,
+        n_submitted_attr=n_submitted_attr,
+        n_interacted_with_attr=n_interacted_with_attr,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     return model, optimizer
@@ -216,6 +233,7 @@ def run_random_split_experiment(
     patience: int = PATIENCE,
     weighted: bool = True,
     seed: int = SEED,
+    feature_mask=None,
 ):
     """Train and evaluate EnrollmentGNN on a 70/10/20 random-student split.
 
@@ -228,6 +246,9 @@ def run_random_split_experiment(
         Random seed used to draw the student split.  Passed to
         ``random_student_split()`` so different seeds produce independent
         partitions.  Defaults to the global SEED constant.
+    feature_mask : list[str] | None
+        Ablation conditions to apply (e.g. ["no_vle"]).  Passed through to
+        GraphDataLoader so the correct features are zeroed before training.
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -236,7 +257,7 @@ def run_random_split_experiment(
     print(f"\n=== Random-split experiment  (week {week:02d}, {loss_weighting}, seed {seed}) ===")
 
     # Load graph
-    data = GraphDataLoader(week).load()
+    data = GraphDataLoader(week, feature_mask=feature_mask).load()
 
     # Build split masks for this seed using random_student_split()
     from oulad_data import random_student_split as _random_student_split
@@ -308,15 +329,17 @@ def run_random_split_experiment(
 # Experiment 2: LCPO (Leave-Course-Presentation-Out) evaluation
 # ---------------------------------------------------------------------------
 
-def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, patience: int = PATIENCE, max_folds: int = None):
+def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, patience: int = PATIENCE, max_folds: int = None, lcpo_patience: int = 50):
     """Train and evaluate one model per LCPO fold.
 
     Parameters
     ----------
-    week       : prediction week
-    max_epochs : max training epochs per fold
-    patience   : early-stopping patience
-    max_folds  : if set, run only the first N folds (for --quick mode)
+    week          : prediction week
+    max_epochs    : max training epochs per fold
+    patience      : early-stopping patience (unused; kept for API compat)
+    max_folds     : if set, run only the first N folds (for --quick mode)
+    lcpo_patience : early-stopping patience used in the LCPO training loop
+                    (default 50, separate from the random-split PATIENCE=20)
     """
     torch.manual_seed(SEED)
     np.random.seed(SEED)
@@ -371,6 +394,37 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         val_mask_np = train_all_np & enroll_df["id_student"].isin(val_student_ids).to_numpy()
         train_mask_np = train_all_np & ~val_mask_np
 
+        # --- Minimum at-risk guarantee: ensure val set has enough positive examples ---
+        min_val_pos = 20
+        # enroll_df has a pre-computed binary "target" column (1 = at-risk, 0 = success)
+        # built by the graph pipeline — use it directly as the ground-truth label array.
+        y_np = enroll_df["target"].to_numpy().astype(np.int32)
+        val_pos_count = int(y_np[val_mask_np].sum())
+
+        if val_pos_count < min_val_pos:
+            # Fall back to enrollment-indexed random sampling until minimum is met.
+            # Try increasing fractions: 10%, 15%, 20%, 25%, 30% of non-test enrollments.
+            train_indices = np.where(train_all_np)[0]
+            for frac in [0.10, 0.15, 0.20, 0.25, 0.30]:
+                n_val = max(1, int(frac * len(train_indices)))
+                candidate_val = rng.choice(train_indices, size=n_val, replace=False)
+                candidate_mask = np.zeros(n_enrollments, dtype=bool)
+                candidate_mask[candidate_val] = True
+                if y_np[candidate_mask].sum() >= min_val_pos:
+                    val_mask_np = candidate_mask
+                    train_mask_np = train_all_np & ~candidate_mask
+                    val_pos_count = int(y_np[val_mask_np].sum())
+                    print(f"[fallback val] frac={frac:.2f}  val_pos={val_pos_count}", end="  ")
+                    break
+            else:
+                # Best-effort: use the 30% sample regardless
+                val_mask_np = candidate_mask
+                train_mask_np = train_all_np & ~candidate_mask
+                val_pos_count = int(y_np[val_mask_np].sum())
+                print(f"[fallback val 30% best-effort] val_pos={val_pos_count}", end="  ")
+        else:
+            print(f"[val_pos={val_pos_count}]", end="  ")
+
         train_mask = torch.tensor(train_mask_np, dtype=torch.bool)
         val_mask = torch.tensor(val_mask_np, dtype=torch.bool)
         test_mask = torch.tensor(test_mask_np, dtype=torch.bool)
@@ -392,7 +446,7 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         best_val_auroc, best_epoch, _train_losses, _val_aurocs = run_training_loop(
             model, data_masked, train_mask, val_mask, optimizer,
             max_epochs=max_epochs,
-            patience=patience,
+            patience=lcpo_patience,
             pos_weight=pos_weight,
         )
 
@@ -405,6 +459,7 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         metrics = compute_metrics(probs, labels)
 
         record = {
+            "week": week,
             "fold_idx": fold_idx,
             "held_out_module": ho_module,
             "held_out_presentation": ho_pres,
@@ -478,8 +533,12 @@ def _print_summary(random_metrics, lcpo_df):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GNN experiment runner for OULAD")
-    parser.add_argument("--week", type=int, default=DEFAULT_WEEK,
-                        help=f"Prediction week (default: {DEFAULT_WEEK})")
+    parser.add_argument("--week", type=int, default=None,
+                        help=f"Single prediction week (default: {DEFAULT_WEEK}). "
+                             "Superseded by --weeks when both are given.")
+    parser.add_argument("--weeks", nargs="+", type=int, default=None,
+                        help="One or more prediction weeks to run in sequence "
+                             "(e.g. --weeks 2 4 6 8). Overrides --week.")
     parser.add_argument("--quick", action="store_true",
                         help="Quick mode: MAX_EPOCHS=5, PATIENCE=3, first 2 LCPO folds only")
     parser.add_argument("--random-only", action="store_true",
@@ -490,42 +549,74 @@ if __name__ == "__main__":
                         help="One or more random seeds for the random-student split experiment "
                              "(default: 42).  Each seed produces an independent train/val/test "
                              "partition; rows are accumulated and written together.")
+    parser.add_argument("--lcpo-patience", type=int, default=50,
+                        help="Early-stopping patience for the LCPO training loop (default: 50).")
     args = parser.parse_args()
+
+    # Resolve week list: --weeks wins over --week; fall back to DEFAULT_WEEK
+    if args.weeks is not None:
+        weeks_to_run = args.weeks
+    elif args.week is not None:
+        weeks_to_run = [args.week]
+    else:
+        weeks_to_run = [DEFAULT_WEEK]
 
     epochs = 5 if args.quick else MAX_EPOCHS
     pat = 3 if args.quick else PATIENCE
     # --quick limits LCPO to 2 folds; a production run uses all folds (max_folds=None)
     max_folds = 2 if args.quick else None
 
+    all_random_rows: list[dict] = []
+    all_lcpo_dfs: list = []
     random_metrics = None
     lcpo_df = None
 
-    # --- Optional overfit check ---
-    if args.overfit_check:
-        print("\n=== Overfit check ===")
-        data_for_check = GraphDataLoader(args.week).load()
-        train_mask_check, _, _ = load_split_masks(args.week, split_type="random")
-        check_loss = run_overfit_check(data_for_check, train_mask_check)
-        print(f"  Overfit check final loss: {check_loss:.4f}")
+    for week in weeks_to_run:
+        print(f"\n{'='*60}")
+        print(f"WEEK {week}")
+        print(f"{'='*60}")
 
-    # --- Random-student experiment: loop over (seed × weighted/unweighted) ---
-    rows = []
-    for seed_val in args.seeds:
-        for weighted_flag in (True, False):
-            row, metrics = run_random_split_experiment(
-                week=args.week, max_epochs=epochs, patience=pat,
-                weighted=weighted_flag, seed=seed_val,
+        # --- Optional overfit check ---
+        if args.overfit_check:
+            print("\n=== Overfit check ===")
+            data_for_check = GraphDataLoader(week).load()
+            train_mask_check, _, _ = load_split_masks(week, split_type="random")
+            check_loss = run_overfit_check(data_for_check, train_mask_check)
+            print(f"  Overfit check final loss: {check_loss:.4f}")
+
+        # --- Random-student experiment: loop over (seed × weighted/unweighted) ---
+        for seed_val in args.seeds:
+            for weighted_flag in (True, False):
+                row, metrics = run_random_split_experiment(
+                    week=week, max_epochs=epochs, patience=pat,
+                    weighted=weighted_flag, seed=seed_val,
+                )
+                all_random_rows.append(row)
+                if random_metrics is None and weighted_flag:
+                    random_metrics = metrics  # first seed, weighted — for _print_summary
+
+        if not args.random_only:
+            lcpo_patience_val = 3 if args.quick else args.lcpo_patience
+            week_lcpo_df = run_lcpo_experiment(
+                week=week, max_epochs=epochs, patience=pat,
+                max_folds=max_folds, lcpo_patience=lcpo_patience_val,
             )
-            rows.append(row)
-            if weighted_flag and seed_val == args.seeds[0]:
-                random_metrics = metrics  # used for _print_summary (first seed, weighted)
+            if not week_lcpo_df.empty:
+                all_lcpo_dfs.append(week_lcpo_df)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
-    pd.DataFrame(rows).to_csv(out_path, index=False)
-    print(f"\n  Saved {len(rows)} rows ({len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
 
-    if not args.random_only:
-        lcpo_df = run_lcpo_experiment(week=args.week, max_epochs=epochs, patience=pat, max_folds=max_folds)
+    # --- Save random results (all weeks stacked) ---
+    out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
+    pd.DataFrame(all_random_rows).to_csv(out_path, index=False)
+    print(f"\n  Saved {len(all_random_rows)} rows "
+          f"({len(weeks_to_run)} week(s) × {len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
+
+    # --- Save LCPO results (all weeks stacked) ---
+    if all_lcpo_dfs:
+        lcpo_df = pd.concat(all_lcpo_dfs, ignore_index=True)
+        lcpo_path = os.path.join(RESULTS_DIR, "lcpo_results.csv")
+        lcpo_df.to_csv(lcpo_path, index=False)
+        print(f"  Saved {len(lcpo_df)} LCPO rows (all weeks) → {lcpo_path}")
 
     _print_summary(random_metrics, lcpo_df)

@@ -357,7 +357,7 @@ def build_combined_csv(
 ) -> pd.DataFrame:
     """Build a combined per-fold/per-seed results DataFrame.
 
-    Columns: model, split_type, fold_or_seed, held_out_module,
+    Columns: week, model, split_type, fold_or_seed, held_out_module,
              held_out_presentation, auroc, auprc, f1, precision, recall,
              balanced_acc.
     """
@@ -367,6 +367,7 @@ def build_combined_csv(
     # ---- GNN random rows (one per seed × loss_weighting) ----
     for _, r in gnn_random_df.iterrows():
         records.append({
+            "week": r.get("week", ""),
             "model": f"GNN ({r.get('loss_weighting', 'weighted')})",
             "split_type": "random_student",
             "fold_or_seed": r.get("seed", ""),
@@ -378,6 +379,7 @@ def build_combined_csv(
     # ---- LightGBM random rows (one per seed) ----
     for rec in lgbm_random_rows:
         records.append({
+            "week": rec.get("week", ""),
             "model": "LightGBM",
             "split_type": "random_student",
             "fold_or_seed": rec.get("seed", ""),
@@ -389,6 +391,7 @@ def build_combined_csv(
     # ---- GNN LCPO rows (one per fold) ----
     for _, r in gnn_lcpo_df.iterrows():
         records.append({
+            "week": r.get("week", ""),
             "model": "GNN",
             "split_type": "lcpo",
             "fold_or_seed": r.get("fold_idx", ""),
@@ -400,6 +403,7 @@ def build_combined_csv(
     # ---- LightGBM LCPO rows (one per fold) ----
     for _, r in lgbm_lcpo_df.iterrows():
         records.append({
+            "week": r.get("week", ""),
             "model": "LightGBM",
             "split_type": "lcpo",
             "fold_or_seed": r.get("fold_idx", ""),
@@ -471,12 +475,15 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray
 # 6. main()
 # ---------------------------------------------------------------------------
 
-def main(week: int = 8, quick: bool = False, seeds: list[int] | None = None):
+def main(week: int = 8, weeks: list[int] | None = None, quick: bool = False, seeds: list[int] | None = None):
     if seeds is None:
         seeds = [42]
+    # Resolve week list: explicit `weeks` wins; fall back to scalar `week`
+    if weeks is None:
+        weeks = [week]
     max_folds = 2 if quick else None
 
-    print(f"[compare_gnn_lgbm] week={week}, quick={quick}, seeds={seeds}")
+    print(f"[compare_gnn_lgbm] weeks={weeks}, quick={quick}, seeds={seeds}")
 
     # --- Load GNN results (written by run_gnn_experiment.py) ---
     gnn_random_path = _GRAPH_DIR / "random_student_results.csv"
@@ -485,47 +492,69 @@ def main(week: int = 8, quick: bool = False, seeds: list[int] | None = None):
 
     gnn_random_df = pd.read_csv(gnn_random_path)
 
-    # Legacy single-row summary for the old comparison table
+    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
+    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
+
+    # Accumulate LightGBM results across all weeks
+    all_lgbm_random_rows: list[dict] = []
+    all_lgbm_fold_dfs: list[pd.DataFrame] = []
+    all_lgbm_lcpo_summaries: list[pd.DataFrame] = []
+
+    for wk in weeks:
+        print(f"\n[compare_gnn_lgbm] === Week {wk} ===")
+
+        # --- Run LightGBM random split (one run per seed) ---
+        for seed_val in seeds:
+            print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}) …")
+            metrics = run_lgbm_random_split(week=wk, seed=seed_val)
+            all_lgbm_random_rows.append({"week": wk, "seed": seed_val, **metrics})
+            print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
+
+        # --- Run LightGBM LCPO ---
+        print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} ({max_folds or 22} folds) …")
+        lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=wk, max_folds=max_folds)
+        lgbm_fold_df = lgbm_fold_df.copy()
+        lgbm_fold_df["week"] = wk
+        all_lgbm_fold_dfs.append(lgbm_fold_df)
+        all_lgbm_lcpo_summaries.append(lgbm_lcpo_summary)
+        mean_auroc = lgbm_lcpo_summary[lgbm_lcpo_summary["metric"] == "auroc"]["mean"].values[0]
+        print(f"  LightGBM LCPO mean AUROC (week {wk}): {mean_auroc:.4f}")
+
+    # Combine all weeks
+    lgbm_all_fold_df = pd.concat(all_lgbm_fold_dfs, ignore_index=True) if all_lgbm_fold_dfs else pd.DataFrame()
+    # Use the last week's summary for the legacy table (or the overall one if single week)
+    lgbm_lcpo_summary_for_table = all_lgbm_lcpo_summaries[-1] if all_lgbm_lcpo_summaries else pd.DataFrame()
+
+    # Legacy single-row summary for the old comparison table (use first week's data)
+    ref_week = weeks[0]
     gnn_random: dict = {}
-    if not gnn_random_df.empty:
-        # Use the first weighted row from the first seed for the legacy table
-        if "loss_weighting" in gnn_random_df.columns:
-            weighted_rows = gnn_random_df[gnn_random_df["loss_weighting"] == "weighted"]
-            ref_row = weighted_rows.iloc[0] if not weighted_rows.empty else gnn_random_df.iloc[0]
+    gnn_random_week_df = gnn_random_df[gnn_random_df["week"] == ref_week] if "week" in gnn_random_df.columns else gnn_random_df
+    if not gnn_random_week_df.empty:
+        if "loss_weighting" in gnn_random_week_df.columns:
+            weighted_rows = gnn_random_week_df[gnn_random_week_df["loss_weighting"] == "weighted"]
+            ref_row = weighted_rows.iloc[0] if not weighted_rows.empty else gnn_random_week_df.iloc[0]
         else:
-            ref_row = gnn_random_df.iloc[0]
+            ref_row = gnn_random_week_df.iloc[0]
         gnn_random = {k: ref_row.get(k, float("nan"))
                       for k in ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]}
 
-    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
-    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path)
-    # Columns: metric, mean, std, min, max
-
-    # --- Run LightGBM random split (one run per seed) ---
-    lgbm_random_rows: list[dict] = []
-    for seed_val in seeds:
-        print(f"[compare_gnn_lgbm] Running LightGBM random split (seed={seed_val}) …")
-        metrics = run_lgbm_random_split(week=week, seed=seed_val)
-        lgbm_random_rows.append({"seed": seed_val, **metrics})
-        print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
-
-    # For legacy table: use mean across seeds
+    lgbm_random_ref = [r for r in all_lgbm_random_rows if r.get("week") == ref_week]
     lgbm_random: dict = {}
-    if lgbm_random_rows:
+    if lgbm_random_ref:
         metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
-        lgbm_random = {k: float(np.mean([r[k] for r in lgbm_random_rows])) for k in metric_keys}
+        lgbm_random = {k: float(np.mean([r[k] for r in lgbm_random_ref])) for k in metric_keys}
 
-    # --- Run LightGBM LCPO ---
-    print(f"[compare_gnn_lgbm] Running LightGBM LCPO ({max_folds or 22} folds) …")
-    lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=week, max_folds=max_folds)
-    print(f"  LightGBM LCPO mean AUROC: {lgbm_lcpo_summary[lgbm_lcpo_summary['metric']=='auroc']['mean'].values[0]:.4f}")
+    gnn_lcpo_summary_for_table = gnn_lcpo_summary if not gnn_lcpo_summary.empty else pd.DataFrame(
+        [{"metric": m, "mean": float("nan"), "std": float("nan"), "min": float("nan"), "max": float("nan")}
+         for m in ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]]
+    )
 
     # --- Build legacy comparison table (gnn_vs_lgbm_comparison.md) ---
     table_md = build_comparison_table(
         gnn_random=gnn_random,
         lgbm_random=lgbm_random,
-        gnn_lcpo_summary=gnn_lcpo_summary,
-        lgbm_lcpo_summary=lgbm_lcpo_summary,
+        gnn_lcpo_summary=gnn_lcpo_summary_for_table,
+        lgbm_lcpo_summary=lgbm_lcpo_summary_for_table,
     )
     out_path = _GRAPH_DIR / "gnn_vs_lgbm_comparison.md"
     out_path.write_text(table_md + "\n")
@@ -535,9 +564,9 @@ def main(week: int = 8, quick: bool = False, seeds: list[int] | None = None):
     # --- Build combined per-fold/per-seed CSV ---
     combined_df = build_combined_csv(
         gnn_random_df=gnn_random_df,
-        lgbm_random_rows=lgbm_random_rows,
+        lgbm_random_rows=all_lgbm_random_rows,
         gnn_lcpo_df=gnn_lcpo_df,
-        lgbm_lcpo_df=lgbm_fold_df,
+        lgbm_lcpo_df=lgbm_all_fold_df,
     )
     combined_path = _GRAPH_DIR / "comparison_results.csv"
     combined_df.to_csv(combined_path, index=False)
@@ -560,8 +589,12 @@ if __name__ == "__main__":
         description="Compare GNN vs. LightGBM under matched split definitions."
     )
     parser.add_argument(
-        "--week", type=int, default=8,
-        help="Prediction week (default: 8).",
+        "--week", type=int, default=None,
+        help="Single prediction week (default: 8). Superseded by --weeks.",
+    )
+    parser.add_argument(
+        "--weeks", nargs="+", type=int, default=None,
+        help="One or more prediction weeks (e.g. --weeks 2 4 6 8). Overrides --week.",
     )
     parser.add_argument(
         "--quick", action="store_true",
@@ -574,4 +607,13 @@ if __name__ == "__main__":
              "are evaluated on the same set of partitions.",
     )
     args = parser.parse_args()
-    main(week=args.week, quick=args.quick, seeds=args.seeds)
+
+    # Resolve week list
+    if args.weeks is not None:
+        resolved_weeks = args.weeks
+    elif args.week is not None:
+        resolved_weeks = [args.week]
+    else:
+        resolved_weeks = [8]
+
+    main(weeks=resolved_weeks, quick=args.quick, seeds=args.seeds)

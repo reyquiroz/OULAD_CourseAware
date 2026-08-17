@@ -1,0 +1,268 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>GraphSAGE Current State Report</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1f2328;
+    background: #ffffff;
+    margin: 0;
+    padding: 32px 16px 48px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  .subtitle { color: #57606a; font-size: 13px; margin: 0 0 28px; }
+  h2 { font-size: 16px; font-weight: 700; margin: 32px 0 10px; padding-bottom: 5px;
+       border-bottom: 1px solid #e5e7eb; color: #1f2328; }
+  h3 { font-size: 13px; font-weight: 700; margin: 20px 0 6px; color: #1f2328; }
+  p { margin: 0 0 10px; }
+  ul, ol { margin: 0 0 10px; padding-left: 22px; }
+  li { margin-bottom: 4px; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 14px; }
+  th { background: #f7f8fa; text-align: left; padding: 6px 10px;
+       border: 1px solid #e5e7eb; font-weight: 600; }
+  td { padding: 6px 10px; border: 1px solid #e5e7eb; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .tag {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    border-radius: 3px; padding: 1px 7px; margin-right: 4px;
+  }
+  .tag-done   { background: #dcfce7; color: #166534; }
+  .tag-partial { background: #fef9c3; color: #854d0e; }
+  .tag-gap    { background: #fee2e2; color: #991b1b; }
+  .callout {
+    border-left: 3px solid #3b82d4; background: #f7f8fa;
+    padding: 10px 14px; margin: 14px 0; border-radius: 0 4px 4px 0;
+    font-size: 13px;
+  }
+  .callout.warn { border-color: #f59e0b; }
+  .metric-hi { color: #166534; font-weight: 600; }
+  .metric-lo { color: #991b1b; font-weight: 600; }
+  .section-note { font-size: 12px; color: #57606a; margin-top: -6px; margin-bottom: 10px; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  footer {
+    text-align: center; font-size: 12px; color: #57606a;
+    border-top: 1px solid #e5e7eb; margin-top: 40px; padding-top: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>GraphSAGE Current State Report</h1>
+<p class="subtitle">OULAD At-Risk Student Prediction — Week 8 Prediction Window — Prepared June 2026</p>
+
+<div class="callout">
+  <strong>Framing note.</strong> A two-layer GraphSAGE model is an appropriate starting point and is not necessarily too simple. The priority before any architectural upgrade is to ensure that the data flow, training procedure, and evaluation protocol are sound. This report documents what has been implemented, what the current results look like, and what remains to be validated.
+</div>
+
+
+<h2>1. Graph Construction</h2>
+
+<p>The heterogeneous graph is built from the OULAD relational tables through a seven-stage pipeline (<code>src/graph_pipeline.py</code>). Artifacts are materialized as Parquet files for weeks 2, 4, 6, and 8. All temporal filtering uses a dual-guard strategy to prevent leakage: VLE interactions and assessment submissions must both have a due date and a submission date on or before the prediction window cutoff.</p>
+
+<h3>Node types (Week 8 — 56-day window)</h3>
+<table>
+  <tr><th>Node type</th><th>Count</th><th>Features</th></tr>
+  <tr><td>student</td><td>28,785</td><td>gender, region, highest_education, imd_band, disability (all one-hot; 971 imd_band values imputed as Unknown)</td></tr>
+  <tr><td>course_presentation</td><td>22</td><td>code_module, code_presentation (one-hot); module_presentation_length (numeric)</td></tr>
+  <tr><td>assessment</td><td>40</td><td>assessment_type (one-hot); weight, date (numeric)</td></tr>
+  <tr><td>vle_resource</td><td>6,364</td><td>activity_type, code_module, code_presentation (one-hot); week_from, week_to (numeric; 5,243 nulls set to 0)</td></tr>
+</table>
+
+<h3>Edge types and attributes</h3>
+<table>
+  <tr><th>Edge type</th><th>Count (Wk 8)</th><th>Attributes</th><th>Used in model?</th></tr>
+  <tr><td>student → enrolled_in → course_presentation</td><td>32,593</td><td>age_band (one-hot), num_of_prev_attempts, studied_credits</td><td><span class="tag tag-done">projected</span></td></tr>
+  <tr><td>course_presentation → contains_assess → assessment</td><td>40</td><td>none</td><td><span class="tag tag-done">structure only</span></td></tr>
+  <tr><td>course_presentation → has_resource → vle_resource</td><td>6,364</td><td>none</td><td><span class="tag tag-done">structure only</span></td></tr>
+  <tr><td>student → submitted → assessment</td><td>44,927</td><td>score (normalized)</td><td><span class="tag tag-gap">stored, not consumed</span></td></tr>
+  <tr><td>student → interacted_with → vle_resource</td><td>1,056,217</td><td>total_clicks, n_interactions, first_day, last_day, active_days (log1p + normalized)</td><td><span class="tag tag-gap">stored, not consumed</span></td></tr>
+</table>
+<p class="section-note">All numeric node and edge features are normalized (zero-mean / unit-variance) inside <code>GraphDataLoader.load()</code> via <code>_normalize_numeric_features()</code>. One-hot columns are left untouched. <code>total_clicks</code> and <code>n_interactions</code> receive a log1p transform before standardization.</p>
+
+
+<h2>2. Model Architecture</h2>
+
+<p><strong>Class:</strong> <code>EnrollmentGNN</code> in <code>src/gnn_model.py</code>. The prediction unit is the <code>enrolled_in</code> edge: one probability per enrollment (32,593 total), so students with multiple enrollments receive independent predictions without label ambiguity.</p>
+
+<h3>Layer structure</h3>
+<table>
+  <tr><th>Component</th><th>Detail</th></tr>
+  <tr><td>Conv layer 1</td><td>HeteroConv wrapping one SAGEConv (mean aggregation) per edge type; heterogeneous input dims → hidden_dim = 64. Bidirectional: forward + reverse edge types for all five relation types.</td></tr>
+  <tr><td>Enrollment projection</td><td><code>enrollment_attr_proj</code> — nn.Linear(n_enrolled_in_attr, 64). After conv1, the enrolled_in edge attributes are projected to 64-d, scatter-mean'd to student node positions, and <em>added</em> to the layer-1 student representations. This injects enrollment context (age band, prior attempts, studied credits) before the second SAGEConv layer.</td></tr>
+  <tr><td>Conv layer 2</td><td>HeteroConv, same edge types; hidden_dim → hidden_dim = 64.</td></tr>
+  <tr><td>Prediction head</td><td>MLP: Linear(128 → 64) → ReLU → Linear(64 → 1). Input is the concatenation of the student embedding and course_presentation embedding for each enrolled_in edge.</td></tr>
+</table>
+
+<h3>Training configuration</h3>
+<table>
+  <tr><th>Setting</th><th>Value</th></tr>
+  <tr><td>Optimizer</td><td>Adam, lr = 1e-3</td></tr>
+  <tr><td>Loss</td><td>BCEWithLogitsLoss; pos_weight = n_neg / n_pos (class-weighted) or unweighted — both conditions compared</td></tr>
+  <tr><td>Max epochs</td><td>200</td></tr>
+  <tr><td>Early stopping</td><td>patience = 20 epochs, monitored on validation AUROC</td></tr>
+  <tr><td>Threshold selection</td><td>Sweep 0.05–0.95 on validation set, maximize F1; typical best threshold is 0.30–0.35</td></tr>
+  <tr><td>Seeds</td><td>42, 123, 7</td></tr>
+  <tr><td>Best epoch (random split, seed 42, weighted)</td><td>epoch 133 out of 200</td></tr>
+</table>
+
+
+<h2>3. Evaluation Protocols</h2>
+
+<h3>Random-student split</h3>
+<p>Students are grouped and assigned to train (70%), validation (10%), or test (20%) without student overlap across splits. The split is fixed by seed and stored as <code>week08_random_split.parquet</code>. Both GNN and LightGBM read from this shared file, ensuring identical train/test populations.</p>
+
+<h3>Leave-Course-Presentation-Out (LCPO)</h3>
+<p>One fold per unique (code_module, code_presentation) — 22 folds total. The held-out course-presentation's enrollments form the test set; all other enrollments form training data. The validation set is drawn by sampling 10% of unique student IDs from the training pool (student-grouped, not enrollment-indexed), so no student straddles train and validation. <strong>Currently only 2 of 22 folds have been run</strong> (quick-mode validation); full results are pending.</p>
+
+<h3>LCPO graph masking</h3>
+<p>During LCPO training, a deep copy of the graph is modified: <code>contains_assess</code> and <code>has_resource</code> edges from the held-out course_presentation node are removed, and <code>submitted</code> / <code>interacted_with</code> edges are filtered by destination node (assessment or VLE resource belonging to the held-out CP). This preserves cross-course behavioral signal for students who are also enrolled in other courses — a correction from the earlier student-index-based filter that over-stripped training data.</p>
+
+
+<h2>4. Current Results — Week 8, Random-Student Split</h2>
+
+<p class="section-note">3 seeds × 2 loss-weighting conditions = 6 runs. Threshold selected on validation set (F1-maximizing).</p>
+
+<table>
+  <tr><th>Model / condition</th><th>AUROC</th><th>AUPRC</th><th>F1</th><th>Precision</th><th>Recall</th><th>Bal. Acc</th><th>Best threshold</th></tr>
+  <tr>
+    <td>GNN — weighted (mean ± std)</td>
+    <td class="metric-hi">0.847 ± 0.004</td>
+    <td>0.886 ± 0.004</td>
+    <td>0.769 ± 0.005</td>
+    <td>0.764 ± 0.031</td>
+    <td>0.775 ± 0.023</td>
+    <td>0.752 ± 0.015</td>
+    <td>0.35</td>
+  </tr>
+  <tr>
+    <td>GNN — unweighted (mean ± std)</td>
+    <td>0.847 ± 0.004</td>
+    <td>0.886 ± 0.004</td>
+    <td>0.768 ± 0.008</td>
+    <td>0.783 ± 0.031</td>
+    <td>0.757 ± 0.037</td>
+    <td>0.759 ± 0.009</td>
+    <td>0.30–0.35</td>
+  </tr>
+  <tr>
+    <td>LightGBM (mean ± std)</td>
+    <td>0.842 ± 0.005</td>
+    <td>0.868 ± 0.005</td>
+    <td class="metric-hi">0.776 ± 0.007</td>
+    <td>0.787 ± 0.007</td>
+    <td>0.766 ± 0.007</td>
+    <td>0.767 ± 0.006</td>
+    <td>—</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>Key observation — random split.</strong> The two-layer GraphSAGE model matches LightGBM within noise on AUROC (0.847 vs. 0.842) and outperforms it on AUPRC (0.886 vs. 0.868). F1 and balanced accuracy slightly favor LightGBM (~0.77 vs. ~0.75–0.76), likely because LightGBM's threshold was not tuned here while the GNN's was. The variance across seeds is comparable (GNN ±0.004, LightGBM ±0.005). Weighted and unweighted GNN loss produce nearly identical AUROC, suggesting the mild class imbalance (52.8% at-risk) does not require explicit re-weighting for this dataset.
+</div>
+
+
+<h2>5. Current Results — Week 8, LCPO (Partial: 2 of 22 folds)</h2>
+
+<div class="callout warn">
+  <strong>Caveat.</strong> Only folds 0 and 1 (both AAA course, 2013J and 2014J) have been run. These are drawn from the same module and may not be representative of the full 22-fold distribution. The results below should not be treated as a reliable LCPO estimate until all 22 folds are complete.
+</div>
+
+<table>
+  <tr><th>Fold</th><th>Held-out course</th><th>n_test</th><th>Best epoch</th><th>GNN AUROC</th><th>GNN F1</th><th>GNN Recall</th><th>LightGBM AUROC</th><th>LightGBM F1</th></tr>
+  <tr>
+    <td>0</td><td>AAA / 2013J</td><td>383</td><td>4</td>
+    <td class="metric-lo">0.746</td><td class="metric-lo">0.273</td><td class="metric-lo">0.181</td>
+    <td>0.773</td><td>0.591</td>
+  </tr>
+  <tr>
+    <td>1</td><td>AAA / 2014J</td><td>365</td><td>4</td>
+    <td class="metric-lo">0.739</td><td class="metric-lo">0.290</td><td class="metric-lo">0.179</td>
+    <td>0.754</td><td>0.578</td>
+  </tr>
+</table>
+
+<table style="margin-top:10px">
+  <tr><th>Model</th><th>AUROC (2 folds)</th><th>AUPRC</th><th>F1</th><th>Recall</th><th>Bal. Acc</th></tr>
+  <tr><td>GNN (mean ± std)</td><td class="metric-lo">0.743 ± 0.005</td><td>0.529 ± 0.045</td><td class="metric-lo">0.282 ± 0.012</td><td class="metric-lo">0.180 ± 0.002</td><td>0.570 ± 0.010</td></tr>
+  <tr><td>LightGBM (2 folds, same courses)</td><td>0.764 ± 0.013</td><td>0.589 ± 0.006</td><td>0.584 ± 0.009</td><td>0.807 ± 0.019</td><td>0.708 ± 0.022</td></tr>
+</table>
+
+<div class="callout warn">
+  <strong>Diagnostic finding — early stopping.</strong> Both LCPO folds stop at epoch 4 (best_epoch = 4 out of 200), indicating the model is not converging under the held-out protocol. The validation AUROC at epoch 4 is 0.69–0.68. This is the most important outstanding issue for the LCPO evaluation: the model may need more epochs, a higher patience setting, or a larger validation set to find a good checkpoint when the held-out course has only ~370–380 test enrollments. This should be investigated before the full 22-fold run.
+</div>
+
+<h3>LightGBM LCPO — full 22 folds (reference)</h3>
+<p>LightGBM has been run on all 22 folds. Course-level variation is substantial:</p>
+<table>
+  <tr><th>Course group</th><th>AUROC range (LightGBM)</th><th>Note</th></tr>
+  <tr><td>BBB, CCC, DDD</td><td>0.867 – 0.877</td><td>Strongest generalization</td></tr>
+  <tr><td>EEE, FFF</td><td>0.837 – 0.890</td><td>Moderate, some presentation variation</td></tr>
+  <tr><td>AAA</td><td>0.754 – 0.773</td><td>Lower; the two GNN folds are from this module</td></tr>
+  <tr><td>GGG</td><td>0.641 – 0.687</td><td>Hardest; near-random precision with very high recall</td></tr>
+</table>
+<p class="section-note">GNN LCPO folds 0–1 come from the AAA module, which is already LightGBM's second-weakest group. This context matters for interpreting the partial LCPO comparison.</p>
+
+
+<h2>6. Implementation Status Summary</h2>
+
+<table>
+  <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+  <tr><td>Graph construction (all 4 weeks)</td><td><span class="tag tag-done">done</span></td><td>Weeks 2, 4, 6, 8 artifacts present</td></tr>
+  <tr><td>Feature normalization</td><td><span class="tag tag-done">done</span></td><td>log1p + z-score; applied in GraphDataLoader</td></tr>
+  <tr><td>Enrollment edge attrs (age band, prev attempts, credits)</td><td><span class="tag tag-done">done</span></td><td>Linear projection → scatter-add to student nodes before conv2</td></tr>
+  <tr><td>Submitted edge attrs (score)</td><td><span class="tag tag-gap">not consumed</span></td><td>Stored and normalized; not yet projected</td></tr>
+  <tr><td>Interacted_with edge attrs (5 click features)</td><td><span class="tag tag-gap">not consumed</span></td><td>Stored, log1p + normalized; not yet projected</td></tr>
+  <tr><td>LCPO masking (destination-node filter)</td><td><span class="tag tag-done">done</span></td><td>Cross-course edges preserved for held-out students</td></tr>
+  <tr><td>Student-grouped validation draw</td><td><span class="tag tag-done">done</span></td><td>No student straddles train/val</td></tr>
+  <tr><td>Threshold selection on validation set</td><td><span class="tag tag-done">done</span></td><td>F1-maximizing sweep 0.05–0.95; typical best = 0.30–0.35</td></tr>
+  <tr><td>Weighted vs. unweighted loss comparison</td><td><span class="tag tag-done">done</span></td><td>Both saved with loss_weighting column</td></tr>
+  <tr><td>Training loss curves</td><td><span class="tag tag-done">done</span></td><td>Saved as .npz per run</td></tr>
+  <tr><td>Overfit smoke test</td><td><span class="tag tag-done">done</span></td><td>run_overfit_check() available via --overfit-check flag</td></tr>
+  <tr><td>Multi-seed random split (seeds 42, 123, 7)</td><td><span class="tag tag-done">done</span></td><td>6 rows in random_student_results.csv</td></tr>
+  <tr><td>Full 22-fold LCPO for GNN</td><td><span class="tag tag-gap">not run</span></td><td>Only 2 folds completed (quick mode)</td></tr>
+  <tr><td>GNN experiments for weeks 2, 4, 6</td><td><span class="tag tag-gap">not run</span></td><td>Artifacts exist; experiments not yet launched</td></tr>
+  <tr><td>Ablation infrastructure</td><td><span class="tag tag-gap">not built</span></td><td>No feature-group masking or run_ablation.py yet</td></tr>
+  <tr><td>Shared GNN/LightGBM fold alignment</td><td><span class="tag tag-done">done</span></td><td>Both read same parquet and CSV split files</td></tr>
+  <tr><td>Tests — graph loader, masking, alignment</td><td><span class="tag tag-done">done</span></td><td>5 tests in test_gnn_data_flow.py (29 total passing)</td></tr>
+</table>
+
+
+<h2>7. Outstanding Issues Before Full LCPO Run</h2>
+
+<ol>
+  <li><strong>Early convergence in LCPO (epoch 4).</strong> Both completed folds stop at epoch 4, which is unusually early. Possible causes: the 10% student-grouped validation set for a small course (AAA, ~380 test enrollments) may have too few at-risk examples to produce a stable AUROC signal; the learning rate or patience may need adjustment for the LCPO regime. This should be diagnosed — e.g., by running with a longer patience (50) and inspecting the loss curve — before all 22 folds are run.</li>
+  <li><strong>Submitted and interacted_with edge attributes not yet projected.</strong> The most direct improvement still available within the two-layer architecture is to apply the same <code>enrollment_attr_proj</code> pattern to the <code>submitted</code> and <code>interacted_with</code> edge attributes. These carry the richest behavioral signals (assessment scores, click counts) and should be injected before conv2.</li>
+  <li><strong>LCPO GNN recall is very low (18%).</strong> With F1 = 0.28 and precision = 0.56–0.77, the model achieves high precision but misses most at-risk students in the held-out course. This is consistent with the threshold being optimized on the in-distribution validation set and not transferring well to the out-of-distribution test course. Threshold recalibration or a held-out-course-specific threshold may be needed.</li>
+  <li><strong>GNN LCPO vs. LightGBM LCPO gap.</strong> On the two available AAA folds, LightGBM AUROC is ~0.76 vs. GNN ~0.74. The gap is modest on AUROC but large on F1 (0.58 vs. 0.28). This is primarily the recall problem from point 3 and not necessarily a model capacity issue.</li>
+</ol>
+
+
+<h2>8. Why Two Layers Are Appropriate</h2>
+
+<p>The two-layer design is appropriate for the following reasons:</p>
+<ul>
+  <li><strong>Receptive field is sufficient.</strong> A two-hop neighborhood from a student node reaches: (1) their enrolled course presentations, (2) the assessments and VLE resources in those courses, and (3) other students enrolled in those same courses. This covers all the cross-student and cross-course signal available in the graph without risk of over-smoothing.</li>
+  <li><strong>Representational capacity is not the bottleneck.</strong> The model achieves 0.847 AUROC on the random split with a 64-dimensional hidden layer and two conv layers — matching LightGBM. This indicates the architecture is expressive enough for the in-distribution task. Remaining gaps are in data flow (submitted/interacted_with edge attrs unused), evaluation (early stopping in LCPO), and generalization (threshold transfer).</li>
+  <li><strong>The current data flow is not yet fully validated.</strong> Introducing GAT, R-GCN, or a graph transformer before confirming that (a) all behavioral features are consumed, (b) LCPO converges properly, and (c) the threshold transfers across courses would make it impossible to attribute any improvement to the model architecture rather than the data and protocol fixes.</li>
+  <li><strong>Variance across seeds is already low.</strong> The GNN random-split standard deviation is ±0.004 AUROC across three seeds, indicating stable training. This is a prerequisite for meaningful architecture comparisons.</li>
+</ul>
+
+<footer>Made with IBM Bob</footer>
+</div>
+</body>
+</html>
