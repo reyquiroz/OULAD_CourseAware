@@ -26,6 +26,8 @@ from gnn_model import (
     SEED,
     EnrollmentGNN,
     GraphDataLoader,
+    _normalize_numeric_features,
+    build_train_subgraph,
     compute_metrics,
     compute_pos_weight,
     load_split_masks,
@@ -49,32 +51,28 @@ HIDDEN_DIM = 64
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _append_or_create_csv(new_df: pd.DataFrame, path: str, dedup_keys: list) -> None:
+    """Append new_df to an existing CSV, deduplicating on dedup_keys. Creates if absent."""
+    if os.path.exists(path):
+        existing = pd.read_csv(path)
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=dedup_keys, keep="last")
+    else:
+        combined = new_df
+    combined.to_csv(path, index=False)
+
+
 def _build_model_and_optimizer(data):
     """Construct a fresh EnrollmentGNN and Adam optimizer."""
     in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
     ei_key = ("student", "enrolled_in", "course_presentation")
     n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
 
-    sub_key = ("student", "submitted", "assessment")
-    n_submitted_attr = (
-        data[sub_key].edge_attr.shape[1]
-        if sub_key in data.edge_types and data[sub_key].get("edge_attr") is not None
-        else 0
-    )
-
-    iw_key = ("student", "interacted_with", "vle_resource")
-    n_interacted_with_attr = (
-        data[iw_key].edge_attr.shape[1]
-        if iw_key in data.edge_types and data[iw_key].get("edge_attr") is not None
-        else 0
-    )
-
     model = EnrollmentGNN(
         in_channels_dict=in_channels_dict,
         hidden_dim=HIDDEN_DIM,
         n_enrolled_in_attr=n_enrolled_in_attr,
-        n_submitted_attr=n_submitted_attr,
-        n_interacted_with_attr=n_interacted_with_attr,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     return model, optimizer
@@ -223,6 +221,65 @@ def _mask_held_out_edges(data, cp_node_idx, enroll_df, held_out_module, held_out
     return masked
 
 
+def _sample_lcpo_val(enroll_df, train_all_mask, y, fold_idx, min_val_pos=20):
+    """Sample val students from train set; fallback if not enough positives.
+
+    Parameters
+    ----------
+    enroll_df : pd.DataFrame
+        Enrollment DataFrame.
+    train_all_mask : np.ndarray
+        Boolean array indicating non-test enrollments.
+    y : np.ndarray
+        Target labels aligned with enroll_df.
+    fold_idx : int
+        Current fold index.
+    min_val_pos : int
+        Minimum number of positives required in validation set.
+
+    Returns
+    -------
+    train_mask_np : np.ndarray
+        Boolean array for training enrollments.
+    val_mask_np : np.ndarray
+        Boolean array for validation enrollments.
+    """
+    n_enrollments = len(enroll_df)
+    train_student_ids = enroll_df.loc[train_all_mask, "id_student"].unique()
+    rng = np.random.default_rng(fold_idx)
+    val_size = max(1, int(0.10 * len(train_student_ids)))
+    val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
+
+    val_mask_np = train_all_mask & enroll_df["id_student"].isin(val_student_ids).to_numpy()
+    train_mask_np = train_all_mask & ~val_mask_np
+
+    y_np = np.asarray(y).astype(np.int32)
+    val_pos_count = int(y_np[val_mask_np].sum())
+
+    if val_pos_count < min_val_pos:
+        train_indices = np.where(train_all_mask)[0]
+        for frac in [0.10, 0.15, 0.20, 0.25, 0.30]:
+            n_val = max(1, int(frac * len(train_indices)))
+            candidate_val = rng.choice(train_indices, size=n_val, replace=False)
+            candidate_mask = np.zeros(n_enrollments, dtype=bool)
+            candidate_mask[candidate_val] = True
+            if y_np[candidate_mask].sum() >= min_val_pos:
+                val_mask_np = candidate_mask
+                train_mask_np = train_all_mask & ~candidate_mask
+                val_pos_count = int(y_np[val_mask_np].sum())
+                print(f"[fallback val] frac={frac:.2f}  val_pos={val_pos_count}", end="  ", flush=True)
+                break
+        else:
+            val_mask_np = candidate_mask
+            train_mask_np = train_all_mask & ~candidate_mask
+            val_pos_count = int(y_np[val_mask_np].sum())
+            print(f"[fallback val 30% best-effort] val_pos={val_pos_count}", end="  ", flush=True)
+    else:
+        print(f"[val_pos={val_pos_count}]", end="  ", flush=True)
+
+    return train_mask_np, val_mask_np
+
+
 # ---------------------------------------------------------------------------
 # Experiment 1: Random-student split
 # ---------------------------------------------------------------------------
@@ -256,8 +313,8 @@ def run_random_split_experiment(
     loss_weighting = "weighted" if weighted else "unweighted"
     print(f"\n=== Random-split experiment  (week {week:02d}, {loss_weighting}, seed {seed}) ===")
 
-    # Load graph
-    data = GraphDataLoader(week, feature_mask=feature_mask).load()
+    # Load raw graph (without normalization) so we can normalise with train mask
+    data = GraphDataLoader(week, feature_mask=feature_mask, skip_normalize=True).load()
 
     # Build split masks for this seed using random_student_split()
     from oulad_data import random_student_split as _random_student_split
@@ -269,19 +326,26 @@ def run_random_split_experiment(
     val_mask   = torch.tensor(_val_s.values,   dtype=torch.bool)
     test_mask  = torch.tensor(_test_s.values,  dtype=torch.bool)
 
+    # Normalize using training-set statistics only to prevent leakage.
+    # Note: _apply_feature_mask was already applied by load(); only normalise here.
+    data = _normalize_numeric_features(data, train_edge_mask=train_mask)
+
+    # Build inductive training subgraph (held-out students excluded from message-passing)
+    train_subgraph = build_train_subgraph(data, train_mask)
+
     # Class-weighting (or None for unweighted run)
-    y = data[("student", "enrolled_in", "course_presentation")].y
+    train_y = train_subgraph[("student", "enrolled_in", "course_presentation")].y
     if weighted:
-        pos_weight = compute_pos_weight(train_mask, y)
+        pos_weight = compute_pos_weight(None, train_y)
     else:
         pos_weight = False  # sentinel: triggers plain BCEWithLogitsLoss()
 
-    # Model + optimizer
+    # Model + optimizer — built from full data so inference channel dims are correct
     model, optimizer = _build_model_and_optimizer(data)
 
     # Training — captures per-epoch curves
     best_val_auroc, best_epoch, train_losses, val_aurocs = run_training_loop(
-        model, data, train_mask, val_mask, optimizer,
+        model, train_subgraph, data, val_mask, optimizer,
         max_epochs=max_epochs,
         patience=patience,
         pos_weight=pos_weight,
@@ -290,7 +354,7 @@ def run_random_split_experiment(
 
     # Save per-epoch loss curves
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    curves_path = os.path.join(RESULTS_DIR, f"training_curves_random_student_{loss_weighting}.npz")
+    curves_path = os.path.join(RESULTS_DIR, f"training_curves_random_student_week{week:02d}_seed{seed}_{loss_weighting}.npz")
     np.savez(curves_path, train_losses=np.array(train_losses), val_aurocs=np.array(val_aurocs))
     print(f"  Loss curves → {curves_path}")
 
@@ -329,8 +393,15 @@ def run_random_split_experiment(
 # Experiment 2: LCPO (Leave-Course-Presentation-Out) evaluation
 # ---------------------------------------------------------------------------
 
-def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, patience: int = PATIENCE, max_folds: int = None, lcpo_patience: int = 50):
-    """Train and evaluate one model per LCPO fold.
+def run_lcpo_experiment(
+    week: int = DEFAULT_WEEK,
+    max_epochs: int = MAX_EPOCHS,
+    patience: int = PATIENCE,
+    max_folds: int = None,
+    lcpo_patience: int = 50,
+    model_seeds: list = None,
+):
+    """Train and evaluate models per LCPO fold, running one model per seed.
 
     Parameters
     ----------
@@ -340,9 +411,12 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
     max_folds     : if set, run only the first N folds (for --quick mode)
     lcpo_patience : early-stopping patience used in the LCPO training loop
                     (default 50, separate from the random-split PATIENCE=20)
+    model_seeds   : list of model initialisation seeds (default: [42, 123, 7, 17, 99]).
+                    One independent training run is performed per seed per fold;
+                    the fold result is the mean ± std across seeds.
     """
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
+    if model_seeds is None:
+        model_seeds = [42, 123, 7, 17, 99]
 
     print(f"\n=== LCPO experiment  (week {week:02d}) ===")
 
@@ -385,122 +459,130 @@ def run_lcpo_experiment(week: int = DEFAULT_WEEK, max_epochs: int = MAX_EPOCHS, 
         test_mask_np = ho_rows.values
         train_all_np = ~test_mask_np
 
-        # 10% of non-test students → validation set for early stopping
-        train_student_ids = enroll_df.loc[train_all_np, "id_student"].unique()
-        rng = np.random.default_rng(SEED + fold_idx)
-        val_size = max(1, int(0.10 * len(train_student_ids)))
-        val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
-
-        val_mask_np = train_all_np & enroll_df["id_student"].isin(val_student_ids).to_numpy()
-        train_mask_np = train_all_np & ~val_mask_np
-
-        # --- Minimum at-risk guarantee: ensure val set has enough positive examples ---
-        min_val_pos = 20
-        # enroll_df has a pre-computed binary "target" column (1 = at-risk, 0 = success)
-        # built by the graph pipeline — use it directly as the ground-truth label array.
+        # Sample val students from train set; fallback if not enough positives.
         y_np = enroll_df["target"].to_numpy().astype(np.int32)
-        val_pos_count = int(y_np[val_mask_np].sum())
-
-        if val_pos_count < min_val_pos:
-            # Fall back to enrollment-indexed random sampling until minimum is met.
-            # Try increasing fractions: 10%, 15%, 20%, 25%, 30% of non-test enrollments.
-            train_indices = np.where(train_all_np)[0]
-            for frac in [0.10, 0.15, 0.20, 0.25, 0.30]:
-                n_val = max(1, int(frac * len(train_indices)))
-                candidate_val = rng.choice(train_indices, size=n_val, replace=False)
-                candidate_mask = np.zeros(n_enrollments, dtype=bool)
-                candidate_mask[candidate_val] = True
-                if y_np[candidate_mask].sum() >= min_val_pos:
-                    val_mask_np = candidate_mask
-                    train_mask_np = train_all_np & ~candidate_mask
-                    val_pos_count = int(y_np[val_mask_np].sum())
-                    print(f"[fallback val] frac={frac:.2f}  val_pos={val_pos_count}", end="  ")
-                    break
-            else:
-                # Best-effort: use the 30% sample regardless
-                val_mask_np = candidate_mask
-                train_mask_np = train_all_np & ~candidate_mask
-                val_pos_count = int(y_np[val_mask_np].sum())
-                print(f"[fallback val 30% best-effort] val_pos={val_pos_count}", end="  ")
-        else:
-            print(f"[val_pos={val_pos_count}]", end="  ")
+        train_mask_np, val_mask_np = _sample_lcpo_val(
+            enroll_df=enroll_df,
+            train_all_mask=train_all_np,
+            y=y_np,
+            fold_idx=fold_idx,
+            min_val_pos=20
+        )
 
         train_mask = torch.tensor(train_mask_np, dtype=torch.bool)
         val_mask = torch.tensor(val_mask_np, dtype=torch.bool)
         test_mask = torch.tensor(test_mask_np, dtype=torch.bool)
 
-        # --- Load graph and mask held-out edges ---
-        data = GraphDataLoader(week).load()
+        # --- Load raw graph, normalise with train mask, then mask held-out edges ---
+        # Load without normalization so stats can be computed from training rows only.
+        data = GraphDataLoader(week, skip_normalize=True).load()
+        # Normalize using training-fold statistics only (prevents leakage across folds).
+        data = _normalize_numeric_features(data, train_edge_mask=train_mask)
         # Attach week to data for use inside helper
         data._held_out_week = week
         data_masked = _mask_held_out_edges(data, cp_node_idx, enroll_df, ho_module, ho_pres)
 
-        # --- Train fresh model ---
-        torch.manual_seed(SEED + fold_idx)
-        np.random.seed(SEED + fold_idx)
-        model, optimizer = _build_model_and_optimizer(data_masked)
+        # Build inductive training subgraph from the masked graph
+        train_subgraph = build_train_subgraph(data_masked, train_mask)
 
-        y = data_masked[("student", "enrolled_in", "course_presentation")].y
-        pos_weight = compute_pos_weight(train_mask, y)
+        train_y = train_subgraph[("student", "enrolled_in", "course_presentation")].y
+        pos_weight = compute_pos_weight(None, train_y)
 
-        best_val_auroc, best_epoch, _train_losses, _val_aurocs = run_training_loop(
-            model, data_masked, train_mask, val_mask, optimizer,
-            max_epochs=max_epochs,
-            patience=lcpo_patience,
-            pos_weight=pos_weight,
-        )
+        # --- Inner loop over model seeds: one independent run per seed ---
+        fold_skipped = False
+        for mseed in model_seeds:
+            torch.manual_seed(mseed)
+            np.random.seed(mseed)
+            model, optimizer = _build_model_and_optimizer(data_masked)
 
-        # --- Evaluate on full (unmasked) graph ---
-        probs, labels = _infer_probs(model, data, test_mask)
-        if labels.sum() == 0 or (1 - labels).sum() == 0:
-            print("SKIP (single class in test)")
+            best_val_auroc, best_epoch, seed_train_losses, seed_val_aurocs = run_training_loop(
+                model, train_subgraph, data_masked, val_mask, optimizer,
+                max_epochs=max_epochs,
+                patience=lcpo_patience,
+                pos_weight=pos_weight,
+            )
+
+            # Save per-fold-per-seed training curves
+            os.makedirs(RESULTS_DIR, exist_ok=True)
+            curves_path = os.path.join(
+                RESULTS_DIR,
+                f"training_curves_lcpo_fold{fold_idx:02d}_seed{mseed}.npz",
+            )
+            np.savez(
+                curves_path,
+                train_losses=np.array(seed_train_losses),
+                val_aurocs=np.array(seed_val_aurocs),
+            )
+
+            # --- Evaluate on full (unmasked) graph ---
+            probs, labels = _infer_probs(model, data, test_mask)
+            if labels.sum() == 0 or (1 - labels).sum() == 0:
+                print("SKIP (single class in test)")
+                fold_skipped = True
+                break
+
+            metrics = compute_metrics(probs, labels)
+
+            record = {
+                "week": week,
+                "fold_idx": fold_idx,
+                "held_out_module": ho_module,
+                "held_out_presentation": ho_pres,
+                "model_seed": mseed,
+                "n_train": int(train_mask_np.sum()),
+                "n_test": int(test_mask_np.sum()),
+                "best_val_auroc": best_val_auroc,
+                "best_epoch": best_epoch,
+                **metrics,
+            }
+            records.append(record)
+
+        if fold_skipped:
             continue
 
-        metrics = compute_metrics(probs, labels)
-
-        record = {
-            "week": week,
-            "fold_idx": fold_idx,
-            "held_out_module": ho_module,
-            "held_out_presentation": ho_pres,
-            "n_train": int(train_mask_np.sum()),
-            "n_test": int(test_mask_np.sum()),
-            "best_val_auroc": best_val_auroc,
-            "best_epoch": best_epoch,
-            **metrics,
-        }
-        records.append(record)
-        print(f"auroc={metrics['auroc']:.4f}  auprc={metrics['auprc']:.4f}")
+        # Report fold-level mean across seeds
+        seed_aurocs = [r["auroc"] for r in records if r["fold_idx"] == fold_idx and r["week"] == week]
+        seed_auprcs = [r["auprc"] for r in records if r["fold_idx"] == fold_idx and r["week"] == week]
+        print(
+            f"auroc={np.mean(seed_aurocs):.4f}±{np.std(seed_aurocs):.4f}  "
+            f"auprc={np.mean(seed_auprcs):.4f}±{np.std(seed_auprcs):.4f}"
+        )
 
     if not records:
         print("  No folds completed.")
         return pd.DataFrame()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    per_fold_df = pd.DataFrame(records)
+    per_seed_df = pd.DataFrame(records)
 
+    # --- lcpo_results.csv: one row per (fold, seed) ---
     per_fold_path = os.path.join(RESULTS_DIR, "lcpo_results.csv")
-    per_fold_df.to_csv(per_fold_path, index=False)
-    print(f"  Per-fold results → {per_fold_path}")
+    _append_or_create_csv(per_seed_df, per_fold_path, dedup_keys=["week", "fold_idx", "model_seed"])
+    print(f"  Per-fold-per-seed results → {per_fold_path}")
 
-    # Summary: mean ± std across folds
+    # --- lcpo_summary.csv: one row per fold with mean ± std across seeds ---
     metric_cols = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
     summary_rows = []
-    for col in metric_cols:
-        summary_rows.append({
-            "metric": col,
-            "mean": per_fold_df[col].mean(),
-            "std": per_fold_df[col].std(),
-            "min": per_fold_df[col].min(),
-            "max": per_fold_df[col].max(),
-        })
+    for (wk, fidx, ho_mod, ho_pres), fold_group in per_seed_df.groupby(
+        ["week", "fold_idx", "held_out_module", "held_out_presentation"], sort=False
+    ):
+        row: dict = {
+            "week": wk,
+            "fold_idx": fidx,
+            "held_out_module": ho_mod,
+            "held_out_presentation": ho_pres,
+        }
+        for col in metric_cols:
+            row[f"{col}_mean"] = fold_group[col].mean()
+            row[f"{col}_std"] = fold_group[col].std()
+        summary_rows.append(row)
     summary_df = pd.DataFrame(summary_rows)
 
     summary_path = os.path.join(RESULTS_DIR, "lcpo_summary.csv")
     summary_df.to_csv(summary_path, index=False)
-    print(f"  Summary → {summary_path}")
+    print(f"  Fold summary (mean±std across seeds) → {summary_path}")
 
-    return per_fold_df
+    return per_seed_df
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +633,9 @@ if __name__ == "__main__":
                              "partition; rows are accumulated and written together.")
     parser.add_argument("--lcpo-patience", type=int, default=50,
                         help="Early-stopping patience for the LCPO training loop (default: 50).")
+    parser.add_argument("--model-seeds", nargs="+", type=int, default=[42, 123, 7, 17, 99],
+                        help="Model initialisation seeds for LCPO (one run per seed per fold). "
+                             "Default: 42 123 7 17 99")
     args = parser.parse_args()
 
     # Resolve week list: --weeks wins over --week; fall back to DEFAULT_WEEK
@@ -600,6 +685,7 @@ if __name__ == "__main__":
             week_lcpo_df = run_lcpo_experiment(
                 week=week, max_epochs=epochs, patience=pat,
                 max_folds=max_folds, lcpo_patience=lcpo_patience_val,
+                model_seeds=args.model_seeds,
             )
             if not week_lcpo_df.empty:
                 all_lcpo_dfs.append(week_lcpo_df)
@@ -608,7 +694,10 @@ if __name__ == "__main__":
 
     # --- Save random results (all weeks stacked) ---
     out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
-    pd.DataFrame(all_random_rows).to_csv(out_path, index=False)
+    _append_or_create_csv(
+        pd.DataFrame(all_random_rows), out_path,
+        dedup_keys=["week", "seed", "loss_weighting"],
+    )
     print(f"\n  Saved {len(all_random_rows)} rows "
           f"({len(weeks_to_run)} week(s) × {len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
 
@@ -616,7 +705,7 @@ if __name__ == "__main__":
     if all_lcpo_dfs:
         lcpo_df = pd.concat(all_lcpo_dfs, ignore_index=True)
         lcpo_path = os.path.join(RESULTS_DIR, "lcpo_results.csv")
-        lcpo_df.to_csv(lcpo_path, index=False)
+        _append_or_create_csv(lcpo_df, lcpo_path, dedup_keys=["week", "fold_idx", "model_seed"])
         print(f"  Saved {len(lcpo_df)} LCPO rows (all weeks) → {lcpo_path}")
 
     _print_summary(random_metrics, lcpo_df)

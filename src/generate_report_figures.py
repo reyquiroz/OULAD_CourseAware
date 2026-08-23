@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -15,7 +16,6 @@ FIGURES_DIR = GRAPH_DIR / "figures"
 TABLES_DIR = GRAPH_DIR / "tables"
 
 COMPARISON_PATH = GRAPH_DIR / "comparison_results.csv"
-RANDOM_RESULTS_PATH = GRAPH_DIR / "random_student_results.csv"
 COURSE_VARIATION_PATH = GRAPH_DIR / "course_variation.csv"
 ABLATION_PATH = GRAPH_DIR / "ablation_results.csv"
 
@@ -112,20 +112,22 @@ def plot_grouped_bars(
         ax.legend(frameon=True)
 
 
-def make_week_performance_figure(
-    comparison_df: pd.DataFrame, random_df: pd.DataFrame
-) -> pd.DataFrame:
+def make_week_performance_figure(comparison_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     weighted_means, weighted_stds = [], []
     unweighted_means, unweighted_stds = [], []
     lgbm_means, lgbm_stds = [], []
 
     for week in WEEKS:
-        weighted = random_df[
-            (random_df["week"] == week) & (random_df["loss_weighting"] == "weighted")
+        weighted = comparison_df[
+            (comparison_df["week"] == week)
+            & (comparison_df["split_type"] == "random_student")
+            & (comparison_df["model"] == "GNN (weighted)")
         ]
-        unweighted = random_df[
-            (random_df["week"] == week) & (random_df["loss_weighting"] == "unweighted")
+        unweighted = comparison_df[
+            (comparison_df["week"] == week)
+            & (comparison_df["split_type"] == "random_student")
+            & (comparison_df["model"] == "GNN (unweighted)")
         ]
         lgbm = comparison_df[
             (comparison_df["week"] == week)
@@ -133,8 +135,8 @@ def make_week_performance_figure(
             & (comparison_df["model"] == "LightGBM")
         ]
 
-        weighted_mean, weighted_std = mean_std(weighted["auroc"] if "auroc" in weighted else empty_series())
-        unweighted_mean, unweighted_std = mean_std(unweighted["auroc"] if "auroc" in unweighted else empty_series())
+        weighted_mean, weighted_std = mean_std(weighted["auroc"] if not weighted.empty and "auroc" in weighted else empty_series())
+        unweighted_mean, unweighted_std = mean_std(unweighted["auroc"] if not unweighted.empty and "auroc" in unweighted else empty_series())
         lgbm_mean, lgbm_std = mean_std(lgbm["auroc"] if "auroc" in lgbm else empty_series())
 
         weighted_means.append(weighted_mean)
@@ -294,12 +296,19 @@ def make_main_comparison_table(comparison_df: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     ensure_dirs()
+
+    if not COMPARISON_PATH.exists():
+        print(
+            "ERROR: comparison_results.csv not found. "
+            "Run compare_gnn_lgbm.py first to generate comparison_results.csv"
+        )
+        sys.exit(1)
+
     comparison_df = load_csv(COMPARISON_PATH)
-    random_df = load_csv(RANDOM_RESULTS_PATH)
     course_df = load_csv(COURSE_VARIATION_PATH)
     ablation_df = load_csv(ABLATION_PATH)
 
-    week_table = make_week_performance_figure(comparison_df, random_df)
+    week_table = make_week_performance_figure(comparison_df)
     make_random_vs_lcpo_figure(comparison_df)
     course_table = make_course_variation_figure(course_df)
     ablation_table = make_ablation_figure(ablation_df)

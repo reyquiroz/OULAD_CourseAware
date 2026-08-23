@@ -14,6 +14,17 @@ done
 echo "=== 2. Split generation ==="
 python src/save_graph_splits.py --weeks 2 4 6 8
 
+echo "=== Preflight: checking graph artifacts ==="
+REQUIRED_ARTIFACT="results/graph/artifacts/week08_enrollments.parquet"
+if [ ! -f "$REQUIRED_ARTIFACT" ]; then
+    echo "ERROR: Required graph artifact not found: $REQUIRED_ARTIFACT"
+    echo "Run the graph pipeline first:"
+    echo "  for week in 2 4 6 8; do python src/run_graph_pipeline.py --week \$week; done"
+    echo "  python src/save_graph_splits.py --weeks 2 4 6 8"
+    exit 1
+fi
+echo "  OK: artifacts found"
+
 echo "=== 3. GNN experiments ==="
 python src/run_gnn_experiment.py --weeks 8 --seeds 42 123 7
 python src/run_gnn_experiment.py --weeks 2 4 6 --seeds 42 123 7 --random-only

@@ -42,6 +42,7 @@ _ARTIFACTS_DIR = _GRAPH_DIR / "artifacts"
 # Add src/ to the path so local modules can be imported
 sys.path.insert(0, str(_SRC_DIR))
 
+from gnn_model import SEED, select_threshold
 from oulad_data import (
     build_features,
     filter_window,
@@ -71,6 +72,8 @@ _FEATURE_COLS = [
     "vle_total", "vle_mean", "vle_std",
     "assess_mean", "assess_max", "assess_count",
     "num_of_prev_attempts",
+    # age_band one-hot columns are added dynamically after pd.get_dummies expansion
+    "studied_credits",
 ]
 
 # Cache so we don't reload CSV files multiple times within one run
@@ -94,12 +97,44 @@ def _load_raw_data():
     )
 
 
+def build_enrolled_in_features(week: int) -> pd.DataFrame:
+    """Read enrolled_in edge parquet and return enrollment-scoped features.
+
+    Returns a DataFrame with columns:
+        id_student, code_module, code_presentation,
+        age_band, studied_credits
+    aligned to the canonical enrollment ordering in the parquet.
+
+    The enrolled_in parquet (produced by GraphDataLoader) stores enrollment
+    metadata columns alongside the edge src/dst indices.  We join them back
+    to the enrollment key triple using the enrollments parquet (same row
+    order — both are derived from studentInfo).
+
+    Note: age_band is returned as a raw string category here; callers are
+    responsible for one-hot encoding it via ``pd.get_dummies`` to match the
+    GNN's encoding of enrolled_in edge attributes.
+    """
+    ei_path = _ARTIFACTS_DIR / f"week{week:02d}_edges_enrolled_in.parquet"
+    ei = pd.read_parquet(ei_path)
+    enroll = pd.read_parquet(_ARTIFACTS_DIR / f"week{week:02d}_enrollments.parquet")
+    # Both files are derived in the same row order (studentInfo), so we can
+    # assign the attribute columns directly.
+    result = enroll[["id_student", "code_module", "code_presentation"]].copy()
+    result["age_band"] = ei["age_band"].values
+    result["studied_credits"] = ei["studied_credits"].values
+    return result
+
+
 def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
     """Build the feature matrix and labels for *week*.
 
     Replicates exactly what ``create_datasets()`` does in ``oulad_data.py``:
     apply the prediction-window filter (Strategy B — due-date + submission-date
     guards), then call ``build_features()`` to get one row per enrollment.
+
+    Also merges in enrollment-scoped features from the enrolled_in edge
+    artifact (``age_band`` one-hot columns and ``studied_credits``) so that
+    LightGBM receives the same features as the GNN edge prediction head.
 
     Returns
     -------
@@ -121,9 +156,25 @@ def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
     df = build_features(vle_w, assess_w, student_info)
     df = sanitize_feature_names(df)
 
-    # Select numeric feature columns that are available (guard against missing ones)
-    available_feature_cols = [c for c in _FEATURE_COLS if c in df.columns]
-    X = df[available_feature_cols].copy()
+    # Merge in enrollment-scoped features from the enrolled_in edge artifact
+    ei_feats = build_enrolled_in_features(week)
+    df = df.merge(
+        ei_feats[["id_student", "code_module", "code_presentation",
+                  "age_band", "studied_credits"]],
+        on=["id_student", "code_module", "code_presentation"],
+        how="left",
+    )
+
+    # One-hot encode age_band to match GNN encoding; drop original string col
+    age_dummies = pd.get_dummies(df["age_band"], prefix="age_band")
+    df = pd.concat([df.drop(columns=["age_band"]), age_dummies], axis=1)
+    age_dummy_cols = list(age_dummies.columns)
+
+    # Build the full feature column list dynamically (base cols + age dummies)
+    base_cols = [c for c in _FEATURE_COLS if c in df.columns]
+    available_feature_cols = base_cols + age_dummy_cols
+
+    X = df[available_feature_cols].fillna(0).copy()
     y = df["target"].copy()
     return X, y, df
 
@@ -184,20 +235,29 @@ def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
 
     # Derive per-seed masks using the same utility as the GNN
     train_s, val_s, test_s = _random_student_split(enrollments, seed=seed)
-    # Match the GNN protocol: LightGBM trains on train+val, tests on test.
-    train_mask = (train_s | val_s).values
+    # Train on train only (not train+val) to match GNN protocol
+    train_mask = train_s.values
+    val_mask = val_s.values
     test_mask = test_s.values
 
     X_train, y_train = X_aligned[train_mask], y_aligned[train_mask]
+    X_val, y_val = X_aligned[val_mask], y_aligned[val_mask]
     X_test, y_test = X_aligned[test_mask], y_aligned[test_mask]
 
     model = LGBMClassifier(**get_lgbm_config())
     model.fit(X_train, y_train)
 
-    y_proba = model.predict_proba(X_test)[:, 1]
-    y_pred = model.predict(X_test)
+    # Select F1-maximising threshold on the val set, same as GNN protocol
+    val_proba = model.predict_proba(X_val)[:, 1]
+    if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
+        threshold = select_threshold(val_proba, y_val.values)
+    else:
+        threshold = 0.5
 
-    return _compute_metrics(y_test.values, y_pred, y_proba)
+    test_proba = model.predict_proba(X_test)[:, 1]
+    test_pred = (test_proba >= threshold).astype(int)
+
+    return _compute_metrics(y_test.values, test_pred, test_proba, threshold=threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +280,11 @@ def run_lgbm_lcpo(week: int = 8, max_folds: int | None = None) -> tuple[pd.DataF
         Per-fold metrics (one row per fold).
     summary_df : pd.DataFrame
         Mean ± std across folds (one row per metric).
+
+    Notes
+    -----
+    LightGBM is deterministic given ``random_state``, so one run per fold
+    suffices (no model-seed loop needed, unlike the GNN's 5-seed protocol).
     """
     folds_path = _SPLITS_DIR / f"week{week:02d}" / "splits" / f"week{week:02d}_lcpo_folds.csv"
     folds_df = pd.read_csv(folds_path)
@@ -248,21 +313,42 @@ def run_lgbm_lcpo(week: int = 8, max_folds: int | None = None) -> tuple[pd.DataF
             (enroll_aligned["code_module"] == held_mod) &
             (enroll_aligned["code_presentation"] == held_pres)
         )
-        train_mask = ~is_held_out
-        test_mask = is_held_out
+        train_all_mask = (~is_held_out).values
+        test_mask = is_held_out.values
+
+        # Draw 10% val students from the train pool, matching the GNN LCPO
+        # protocol (rng keyed on fold_idx only, matching the decoupled RNG in
+        # run_lcpo_experiment() — Sub-Task 5).
+        train_student_ids = enroll_aligned.loc[train_all_mask, "id_student"].unique()
+        rng = np.random.default_rng(fold_idx)
+        val_size = max(1, int(0.10 * len(train_student_ids)))
+        val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
+        val_student_set = set(val_student_ids)
+
+        val_mask = train_all_mask & enroll_aligned["id_student"].isin(val_student_set).to_numpy()
+        train_mask = train_all_mask & ~val_mask
 
         X_train = X_aligned[train_mask]
         y_train = y_aligned[train_mask]
+        X_val = X_aligned[val_mask]
+        y_val = y_aligned[val_mask]
         X_test = X_aligned[test_mask]
         y_test = y_aligned[test_mask]
 
         model = LGBMClassifier(**get_lgbm_config())
         model.fit(X_train, y_train)
 
-        y_proba = model.predict_proba(X_test)[:, 1]
-        y_pred = model.predict(X_test)
+        # Tune threshold on val set using F1-max, matching GNN protocol
+        val_proba = model.predict_proba(X_val)[:, 1]
+        if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
+            threshold = select_threshold(val_proba, y_val.values)
+        else:
+            threshold = 0.5
 
-        metrics = _compute_metrics(y_test.values, y_pred, y_proba)
+        test_proba = model.predict_proba(X_test)[:, 1]
+        test_pred = (test_proba >= threshold).astype(int)
+
+        metrics = _compute_metrics(y_test.values, test_pred, test_proba, threshold=threshold)
         records.append({
             "fold_idx": fold_idx,
             "held_out_module": held_mod,
@@ -459,8 +545,26 @@ def build_summary_markdown(combined_df: pd.DataFrame) -> str:
 # Shared metric computation
 # ---------------------------------------------------------------------------
 
-def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray) -> dict:
-    """Return a dict with lowercase metric keys."""
+def _compute_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba: np.ndarray,
+    threshold: float = 0.5,
+) -> dict:
+    """Return a dict with lowercase metric keys.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        Ground-truth binary labels.
+    y_pred : np.ndarray
+        Predicted binary labels (should already be thresholded at *threshold*).
+    y_proba : np.ndarray
+        Predicted probabilities (used for ranking metrics AUROC / AUPRC).
+    threshold : float, optional
+        Classification threshold used to produce *y_pred* (default 0.5).
+        Stored in the returned dict for traceability.
+    """
     return {
         "auroc": roc_auc_score(y_true, y_proba),
         "auprc": average_precision_score(y_true, y_proba),
@@ -468,6 +572,7 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "balanced_acc": balanced_accuracy_score(y_true, y_pred),
+        "threshold": threshold,
     }
 
 
@@ -475,7 +580,68 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray
 # 6. main()
 # ---------------------------------------------------------------------------
 
-def main(week: int = 8, weeks: list[int] | None = None, quick: bool = False, seeds: list[int] | None = None):
+def _load_gnn_results_from_csv(
+    weeks: list[int],
+    seeds: list[int],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict], list[pd.DataFrame], list[pd.DataFrame]]:
+    """Load existing GNN result CSVs and run LightGBM fresh (fast).
+
+    Used by the --from-csv path so experiments don't need to be re-run.
+    Returns the same tuple of accumulators as the normal path.
+    """
+    gnn_random_path = _GRAPH_DIR / "random_student_results.csv"
+    gnn_lcpo_path = _GRAPH_DIR / "lcpo_results.csv"
+    gnn_lcpo_summary_path = _GRAPH_DIR / "lcpo_summary.csv"
+
+    if not gnn_random_path.exists():
+        raise FileNotFoundError(
+            f"GNN random results not found: {gnn_random_path}. "
+            "Run run_gnn_experiment.py first."
+        )
+
+    gnn_random_df = pd.read_csv(gnn_random_path)
+    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
+    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
+
+    all_lgbm_random_rows: list[dict] = []
+    all_lgbm_fold_dfs: list[pd.DataFrame] = []
+    all_lgbm_lcpo_summaries: list[pd.DataFrame] = []
+
+    for wk in weeks:
+        print(f"\n[compare_gnn_lgbm] === Week {wk} (--from-csv: running LightGBM fresh) ===")
+
+        for seed_val in seeds:
+            print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}) …")
+            metrics = run_lgbm_random_split(week=wk, seed=seed_val)
+            all_lgbm_random_rows.append({"week": wk, "seed": seed_val, **metrics})
+            print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
+
+        print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} (all folds) …")
+        lgbm_fold_df, lgbm_lcpo_summary_wk = run_lgbm_lcpo(week=wk, max_folds=None)
+        lgbm_fold_df = lgbm_fold_df.copy()
+        lgbm_fold_df["week"] = wk
+        all_lgbm_fold_dfs.append(lgbm_fold_df)
+        all_lgbm_lcpo_summaries.append(lgbm_lcpo_summary_wk)
+        mean_auroc = lgbm_lcpo_summary_wk[lgbm_lcpo_summary_wk["metric"] == "auroc"]["mean"].values[0]
+        print(f"  LightGBM LCPO mean AUROC (week {wk}): {mean_auroc:.4f}")
+
+    return (
+        gnn_random_df,
+        gnn_lcpo_df,
+        gnn_lcpo_summary,
+        all_lgbm_random_rows,
+        all_lgbm_fold_dfs,
+        all_lgbm_lcpo_summaries,
+    )
+
+
+def main(
+    week: int = 8,
+    weeks: list[int] | None = None,
+    quick: bool = False,
+    seeds: list[int] | None = None,
+    from_csv: bool = False,
+):
     if seeds is None:
         seeds = [42]
     # Resolve week list: explicit `weeks` wins; fall back to scalar `week`
@@ -483,42 +649,52 @@ def main(week: int = 8, weeks: list[int] | None = None, quick: bool = False, see
         weeks = [week]
     max_folds = 2 if quick else None
 
-    print(f"[compare_gnn_lgbm] weeks={weeks}, quick={quick}, seeds={seeds}")
+    print(f"[compare_gnn_lgbm] weeks={weeks}, quick={quick}, seeds={seeds}, from_csv={from_csv}")
 
-    # --- Load GNN results (written by run_gnn_experiment.py) ---
-    gnn_random_path = _GRAPH_DIR / "random_student_results.csv"
-    gnn_lcpo_path = _GRAPH_DIR / "lcpo_results.csv"
-    gnn_lcpo_summary_path = _GRAPH_DIR / "lcpo_summary.csv"
+    if from_csv:
+        # --from-csv: load existing GNN CSVs; run LightGBM fresh; build comparison_results.csv
+        (
+            gnn_random_df,
+            gnn_lcpo_df,
+            gnn_lcpo_summary,
+            all_lgbm_random_rows,
+            all_lgbm_fold_dfs,
+            all_lgbm_lcpo_summaries,
+        ) = _load_gnn_results_from_csv(weeks=weeks, seeds=seeds)
+    else:
+        # Normal path: load GNN results written by run_gnn_experiment.py, run LightGBM
+        gnn_random_path = _GRAPH_DIR / "random_student_results.csv"
+        gnn_lcpo_path = _GRAPH_DIR / "lcpo_results.csv"
+        gnn_lcpo_summary_path = _GRAPH_DIR / "lcpo_summary.csv"
 
-    gnn_random_df = pd.read_csv(gnn_random_path)
+        gnn_random_df = pd.read_csv(gnn_random_path)
+        gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
+        gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
 
-    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
-    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
+        # Accumulate LightGBM results across all weeks
+        all_lgbm_random_rows: list[dict] = []
+        all_lgbm_fold_dfs: list[pd.DataFrame] = []
+        all_lgbm_lcpo_summaries: list[pd.DataFrame] = []
 
-    # Accumulate LightGBM results across all weeks
-    all_lgbm_random_rows: list[dict] = []
-    all_lgbm_fold_dfs: list[pd.DataFrame] = []
-    all_lgbm_lcpo_summaries: list[pd.DataFrame] = []
+        for wk in weeks:
+            print(f"\n[compare_gnn_lgbm] === Week {wk} ===")
 
-    for wk in weeks:
-        print(f"\n[compare_gnn_lgbm] === Week {wk} ===")
+            # --- Run LightGBM random split (one run per seed) ---
+            for seed_val in seeds:
+                print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}) …")
+                metrics = run_lgbm_random_split(week=wk, seed=seed_val)
+                all_lgbm_random_rows.append({"week": wk, "seed": seed_val, **metrics})
+                print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
 
-        # --- Run LightGBM random split (one run per seed) ---
-        for seed_val in seeds:
-            print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}) …")
-            metrics = run_lgbm_random_split(week=wk, seed=seed_val)
-            all_lgbm_random_rows.append({"week": wk, "seed": seed_val, **metrics})
-            print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
-
-        # --- Run LightGBM LCPO ---
-        print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} ({max_folds or 22} folds) …")
-        lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=wk, max_folds=max_folds)
-        lgbm_fold_df = lgbm_fold_df.copy()
-        lgbm_fold_df["week"] = wk
-        all_lgbm_fold_dfs.append(lgbm_fold_df)
-        all_lgbm_lcpo_summaries.append(lgbm_lcpo_summary)
-        mean_auroc = lgbm_lcpo_summary[lgbm_lcpo_summary["metric"] == "auroc"]["mean"].values[0]
-        print(f"  LightGBM LCPO mean AUROC (week {wk}): {mean_auroc:.4f}")
+            # --- Run LightGBM LCPO ---
+            print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} ({max_folds or 22} folds) …")
+            lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=wk, max_folds=max_folds)
+            lgbm_fold_df = lgbm_fold_df.copy()
+            lgbm_fold_df["week"] = wk
+            all_lgbm_fold_dfs.append(lgbm_fold_df)
+            all_lgbm_lcpo_summaries.append(lgbm_lcpo_summary)
+            mean_auroc = lgbm_lcpo_summary[lgbm_lcpo_summary["metric"] == "auroc"]["mean"].values[0]
+            print(f"  LightGBM LCPO mean AUROC (week {wk}): {mean_auroc:.4f}")
 
     # Combine all weeks
     lgbm_all_fold_df = pd.concat(all_lgbm_fold_dfs, ignore_index=True) if all_lgbm_fold_dfs else pd.DataFrame()
@@ -606,6 +782,11 @@ if __name__ == "__main__":
              "(default: 42).  Mirrors the GNN's --seeds argument so both models "
              "are evaluated on the same set of partitions.",
     )
+    parser.add_argument(
+        "--from-csv", action="store_true",
+        help="Build comparison_results.csv from existing GNN CSVs without re-running "
+             "GNN experiments. LightGBM is re-run fresh (it is fast).",
+    )
     args = parser.parse_args()
 
     # Resolve week list
@@ -616,4 +797,4 @@ if __name__ == "__main__":
     else:
         resolved_weeks = [8]
 
-    main(weeks=resolved_weeks, quick=args.quick, seeds=args.seeds)
+    main(weeks=resolved_weeks, quick=args.quick, seeds=args.seeds, from_csv=args.from_csv)
