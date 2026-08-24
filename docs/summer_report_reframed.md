@@ -1,30 +1,23 @@
-# Preliminary Title
-
-<!-- CHANGED: reframed title to foreground the evaluation framework contribution rather than the model comparison -->
-A Leakage-Safe Evaluation Framework for Graph and Tabular Models in Cross-Course At-Risk Prediction: GraphSAGE and LightGBM on OULAD
+# A Leakage-Safe Evaluation Framework for Graph and Tabular Models in Cross-Course At-Risk Prediction: GraphSAGE and LightGBM on OULAD
 
 # Abstract
 
-<!-- CHANGED: rewritten to lead with the methodological contribution; retained all empirical numbers; added corrected win count (18/22); added modest-margin acknowledgement; added framework-enables sentence -->
 Early at-risk prediction in learning analytics is frequently undermined by temporal leakage—the inadvertent inclusion of assessment scores or VLE activity recorded after the prediction cutoff. This report presents a leakage-safe, enrollment-centric evaluation framework for comparing graph and tabular models on the Open University Learning Analytics Dataset (OULAD). The framework enforces a dual temporal guard (assessment due date ≤ window AND submission date ≤ window), scopes supervision to the enrollment triple (student, module, presentation) rather than the student, and provides two complementary evaluation protocols: random-student splitting (70/10/20) and leave-course-presentation-out (LCPO, 22 folds). Within this framework we compare a heterogeneous GraphSAGE enrollment classifier against a feature-matched LightGBM baseline at prediction weeks 2, 4, 6, and 8. Under random-student splits at week 8, GraphSAGE achieves AUROC 0.881 ± 0.002 versus LightGBM 0.842 ± 0.005. Under LCPO at week 8, GraphSAGE achieves 0.844 ± 0.063 versus LightGBM 0.824 ± 0.075; GraphSAGE leads in 18 of 22 folds, with a mean margin of 0.020 AUROC. This modest margin suggests the graph structure provides consistent but not dramatic improvement under cross-course generalisation. Ablation experiments confirm that assessment features and enrollment-scoped edge attributes drive the largest share of the GraphSAGE advantage. The framework provides a reusable template for leakage-safe, course-aware evaluation of any graph or tabular model on OULAD or structurally similar learning management datasets.
 
 ## 1. Introduction
 
 Early identification of students at risk of failure or withdrawal is a central problem in learning analytics. Institutions seek models that can surface actionable signals early enough for intervention while remaining robust across different courses and presentation runs. OULAD is a widely used benchmark for this problem because it combines demographics, prior history, assessment behavior, and virtual learning environment (VLE) activity across multiple modules and presentations.
 
-<!-- CHANGED: added paragraph on evaluation methodology as a contribution; foregrounds leakage prevention and enrollment-centric framing -->
 A recurring issue in this literature is that evaluation methodology receives less attention than model architecture. Studies differ on whether temporal guards cover both due dates and submission dates, whether prediction targets are defined at the student level or the enrollment level, and whether generalisation is tested only within a course presentation or across presentations. These choices are not incidental: using a single temporal guard instead of a dual guard can silently admit future assessment scores into training features, and aggregating at the student level conflates enrollments with different outcomes. This report makes the evaluation methodology explicit and replicable, so that performance comparisons rest on a shared, leakage-safe foundation.
 
 This study evaluates whether representing OULAD as a heterogeneous graph improves early risk prediction relative to a strong tabular baseline. Rather than collapsing all interactions into flat aggregate features alone, the graph formulation preserves links among students, course presentations, assessments, and VLE resources. This allows message passing to combine student context with structured behavioral information.
 
-<!-- CHANGED: research questions replaced with three framework-oriented RQs per reframing directive -->
 The report addresses three research questions:
 
 1. Can a leakage-safe, enrollment-centric graph representation improve early at-risk prediction beyond a feature-matched tabular baseline under both random-student and cross-course (LCPO) evaluation?
 2. How does cross-course generalisation performance vary as a function of course-design factors (sample size, class prevalence, assessment availability, VLE density, student overlap)?
 3. What is the relative contribution of graph structure versus enrollment-scoped edge attributes to GraphSAGE predictive performance?
 
-<!-- NEW SECTION -->
 ### 1.1 Contributions
 
 This chapter makes the following contributions:
@@ -61,7 +54,6 @@ For random-student evaluation, multiple seeds are used and both weighted and unw
 
 Ablation experiments remove specific feature groups while preserving graph structure by zeroing selected node or edge features. The evaluated conditions are full, no_assessment, no_vle, no_temporal, no_course_features, and no_edge_attrs.
 
-<!-- NEW SECTION -->
 ### 4.1 Evaluation Design and Leakage Prevention
 
 **Leakage prevention.** All feature engineering is governed by the `filter_window()` function in `src/oulad_data.py`, which implements Strategy B — a dual temporal guard (see `docs/LEAKAGE_PREVENTION.md`). For assessment features, two conditions must hold simultaneously: the assessment due date must fall at or before the prediction cutoff (`due_date ≤ window`), and the student's submission must also have been recorded at or before the cutoff (`date_submitted ≤ window`). The second guard is necessary because 28.8% of OULAD submissions carry a `date_submitted` strictly greater than the due date, meaning that a single-guard implementation would silently include future scores. VLE features are filtered analogously on the activity date. The empirical AUROC impact of adding the submission-date guard is ≤ ±0.0024 across all windows, but its inclusion is scientifically necessary for strict leakage-free evaluation.
@@ -87,7 +79,6 @@ Ablation experiments remove specific feature groups while preserving graph struc
 | LCPO | GNN | 0.844 ± 0.063 | 0.850 ± 0.106 | 0.738 ± 0.087 | 0.786 ± 0.144 | 0.726 ± 0.121 | 0.753 ± 0.069 |
 | LCPO | LightGBM | 0.824 ± 0.075 | 0.823 ± 0.129 | 0.737 ± 0.095 | 0.744 ± 0.191 | 0.787 ± 0.111 | 0.738 ± 0.104 |
 
-<!-- CHANGED: updated win count from 19 to 18; added modest-margin sentence per reframing directive -->
 The graph model outperforms LightGBM on AUROC in both settings, with a margin of about 0.039 under random-student splitting and about 0.020 under LCPO. GraphSAGE leads in 18 of 22 LCPO folds. The modest LCPO margin of 0.020 AUROC suggests that while graph structure provides consistent improvement, the advantage is not large enough to claim practical superiority without external validation.
 
 ### Early-prediction performance across weeks
@@ -131,15 +122,12 @@ Relative to the full model, removing assessment features reduces AUROC by about 
 
 The largest GNN gains appear in both GGG presentations and both AAA presentations, while the clearest LightGBM wins are CCC 2014J and EEE 2014J. The pattern suggests that graph structure may be especially helpful for presentations where sparse or difficult-to-summarize relational behavior matters, while some presentations remain well captured by flat aggregated features.
 
-<!-- NEW SECTION -->
 ### Model stability across seeds
 
-<!-- CHANGED: added model stability subsection per reframing directive -->
 GNN AUROC standard deviation across seeds ranges across folds (see Table — LCPO results). Folds where the per-seed standard deviation is high should be interpreted cautiously: a high GNN std in a fold does not necessarily mean LightGBM is genuinely superior; it may instead reflect unstable training on a small or class-imbalanced held-out presentation. Multi-seed variance estimation (5 seeds per fold) was designed specifically to distinguish these cases.
 
 ## 6. Discussion
 
-<!-- CHANGED: reframed main claim; added framework-orientation paragraph; retained all empirical statements -->
 Across both evaluation settings, GraphSAGE consistently exceeds LightGBM on AUROC. The random-split advantage (0.039) is larger than the LCPO advantage (0.020), but the LCPO result is arguably more important because it measures robustness when generalising to unseen course presentations. GraphSAGE leading in 18 of 22 LCPO folds confirms that relational inductive bias is not simply memorising familiar presentation-specific patterns. The modest LCPO margin of 0.020 AUROC, however, underscores that graph structure provides consistent rather than transformative improvement over a well-constructed tabular baseline; external validation on a second dataset would be required before claiming practical superiority.
 
 The week-by-week trend indicates that predictive performance improves smoothly as more evidence accumulates. Even at week 2, the graph model already outperforms the tabular baseline, implying that early relational signals are informative. By week 8, both models are strong, but the graph model retains a clear margin.
@@ -148,10 +136,8 @@ The ablation findings show that assessment information and edge attributes are t
 
 Course-level variation shows that the graph advantage is not uniform. Strong wins on GGG and AAA coexist with losses on CCC 2014J and EEE 2014J. This heterogeneity likely reflects differences in class balance, assessment design, cohort size, and the density or usefulness of interaction signals. These results argue against treating a single average score as the whole story; deployment-oriented conclusions should consider where graph models help most and where simpler tabular models remain competitive.
 
-<!-- CHANGED: added paragraph on what the framework enables for future datasets -->
 The evaluation framework itself—dual temporal guard, enrollment-centric supervision, matched baseline, multi-seed LCPO—is separable from the specific models compared here. Any future model (e.g., a transformer-based architecture or a different GNN variant) can be slotted into the same protocol, producing results that are directly comparable to those reported here. This makes the framework a lasting contribution independent of whether GraphSAGE proves to be the best model on OULAD.
 
-<!-- NEW SECTION -->
 ## X. External Validation (Pending)
 
 Results will be reported separately for each dataset. Pooling across datasets
@@ -180,7 +166,6 @@ or broader future work.
 
 ## 7. Limitations
 
-<!-- NEW SECTION: full limitations section per reframing directive -->
 1. **Single-dataset evaluation.** All results are from OULAD. External validation on a structurally similar dataset (e.g., KDD Cup 2015 / XuetangX) is pending. The degree to which the graph advantage generalises to other learning management systems is unknown.
 
 2. **Module identity anonymisation.** Module codes in OULAD (AAA, BBB, etc.) do not correspond to named courses; interpretations of course-design factors (e.g., assessment structure, VLE design philosophy) are therefore limited to observable statistical proxies rather than substantive curricular descriptions.
@@ -193,7 +178,6 @@ or broader future work.
 
 ## 8. Conclusion and Future Work
 
-<!-- CHANGED: updated section number to 8 (was 7) to accommodate Limitations; reframed main claim to foreground framework contribution -->
 This study presents a leakage-safe evaluation framework for comparing graph and tabular models on OULAD, and finds that a heterogeneous GraphSAGE model provides a consistent improvement over a matched LightGBM baseline for early at-risk prediction. The advantage appears under both random-student and leave-course-presentation-out evaluation and persists across weeks 2, 4, 6, and 8. GraphSAGE leads in 18 of 22 LCPO folds; the mean LCPO AUROC margin is 0.020. Ablation results indicate that assessment features and edge attributes are central to that gain.
 
 Future work should extend the ablation study to multiple seeds, investigate calibration and threshold stability under LCPO, and analyse course-level correlates of graph-model gains more systematically using the diagnostic framework outlined in the Evaluation Design section. Additional directions include inductive evaluation on newly added students or presentations, richer temporal architectures, and intervention-oriented analyses linking predictions to actionable support strategies. External validation on a second dataset (KDD Cup 2015 or an equivalent) would determine how much of the graph advantage is OULAD-specific.

@@ -156,14 +156,15 @@ def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
     df = build_features(vle_w, assess_w, student_info)
     df = sanitize_feature_names(df)
 
-    # Merge in enrollment-scoped features from the enrolled_in edge artifact
-    ei_feats = build_enrolled_in_features(week)
-    df = df.merge(
-        ei_feats[["id_student", "code_module", "code_presentation",
-                  "age_band", "studied_credits"]],
-        on=["id_student", "code_module", "code_presentation"],
-        how="left",
-    )
+    # age_band and studied_credits are already present in df from build_features
+    # (both originate from studentInfo).  Only merge columns that are missing.
+    missing_cols = [c for c in ("age_band", "studied_credits") if c not in df.columns]
+    if missing_cols:
+        ei_feats = build_enrolled_in_features(week)
+        merge_cols = ["id_student", "code_module", "code_presentation"] + missing_cols
+        df = df.merge(ei_feats[merge_cols],
+                      on=["id_student", "code_module", "code_presentation"],
+                      how="left")
 
     # One-hot encode age_band to match GNN encoding; drop original string col
     age_dummies = pd.get_dummies(df["age_band"], prefix="age_band")
@@ -720,10 +721,32 @@ def main(
         metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
         lgbm_random = {k: float(np.mean([r[k] for r in lgbm_random_ref])) for k in metric_keys}
 
-    gnn_lcpo_summary_for_table = gnn_lcpo_summary if not gnn_lcpo_summary.empty else pd.DataFrame(
-        [{"metric": m, "mean": float("nan"), "std": float("nan"), "min": float("nan"), "max": float("nan")}
-         for m in ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]]
-    )
+    # lcpo_summary.csv is now in wide per-fold format (auroc_mean, auroc_std …),
+    # one row per fold.  Convert to the long format (metric/mean/std) that
+    # build_comparison_table expects by taking the across-fold mean/std.
+    _metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
+    if not gnn_lcpo_summary.empty and "auroc_mean" in gnn_lcpo_summary.columns:
+        long_rows = []
+        for m in _metric_keys:
+            col_mean = f"{m}_mean"
+            col_std = f"{m}_std"
+            vals = gnn_lcpo_summary[col_mean] if col_mean in gnn_lcpo_summary.columns else pd.Series(dtype=float)
+            long_rows.append({
+                "metric": m,
+                "mean": float(vals.mean()) if len(vals) > 0 else float("nan"),
+                "std": float(vals.std(ddof=1)) if len(vals) > 1 else float("nan"),
+                "min": float(vals.min()) if len(vals) > 0 else float("nan"),
+                "max": float(vals.max()) if len(vals) > 0 else float("nan"),
+            })
+        gnn_lcpo_summary_for_table = pd.DataFrame(long_rows)
+    elif not gnn_lcpo_summary.empty and "metric" in gnn_lcpo_summary.columns:
+        # Legacy long format — use as-is
+        gnn_lcpo_summary_for_table = gnn_lcpo_summary
+    else:
+        gnn_lcpo_summary_for_table = pd.DataFrame(
+            [{"metric": m, "mean": float("nan"), "std": float("nan"), "min": float("nan"), "max": float("nan")}
+             for m in _metric_keys]
+        )
 
     # --- Build legacy comparison table (gnn_vs_lgbm_comparison.md) ---
     table_md = build_comparison_table(

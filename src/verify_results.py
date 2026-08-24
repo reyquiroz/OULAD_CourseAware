@@ -16,6 +16,7 @@ Usage
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,7 @@ _GRAPH_DIR = _PROJECT_ROOT / "results" / "graph"
 _COMPARISON_PATH = _GRAPH_DIR / "comparison_results.csv"
 _TABLES_DIR = _GRAPH_DIR / "tables"
 
+_DATASET = "oulad"
 _METRICS = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
 _TOL = 1e-4
 
@@ -207,6 +209,15 @@ def main() -> int:
 
     print(f"[verify_results] Reading {_COMPARISON_PATH}")
     df = pd.read_csv(_COMPARISON_PATH)
+
+    if "dataset" in df.columns:
+        datasets = sorted(df["dataset"].dropna().unique().tolist())
+        if len(datasets) > 1:
+            warnings.warn(
+                f"Multiple datasets found: {datasets}. Verifying OULAD only.",
+                stacklevel=1,
+            )
+        df = df[df["dataset"] == _DATASET].copy()
 
     discrepancies: list[str] = []
 

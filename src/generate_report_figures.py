@@ -18,6 +18,8 @@ TABLES_DIR = GRAPH_DIR / "tables"
 COMPARISON_PATH = GRAPH_DIR / "comparison_results.csv"
 COURSE_VARIATION_PATH = GRAPH_DIR / "course_variation.csv"
 ABLATION_PATH = GRAPH_DIR / "ablation_results.csv"
+MODULE_SUMMARY_PATH = GRAPH_DIR / "lcpo_module_summary.csv"
+DIAGNOSTICS_PATH = GRAPH_DIR / "course_diagnostics.csv"
 
 METRICS = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
 WEEKS = [2, 4, 6, 8]
@@ -274,6 +276,170 @@ def make_ablation_figure(ablation_df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+def make_module_summary_figure(module_df: pd.DataFrame) -> None:
+    """Horizontal grouped bar chart: one bar pair (GNN vs LightGBM) per module.
+
+    Bars are sorted by GNN AUROC descending.  Error bars show ± 1 std.
+    Saves to results/graph/figures/fig_module_summary.png.
+
+    Parameters
+    ----------
+    module_df : pd.DataFrame
+        Output of summarize_lcpo_modules.build_module_summary() —
+        columns: held_out_module, model, auroc_mean, auroc_std, …
+    """
+    if module_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.set_title("LCPO AUROC by Module (GNN vs LightGBM)")
+        fig.tight_layout()
+        fig.savefig(FIGURES_DIR / "fig_module_summary.png", dpi=150)
+        plt.close(fig)
+        return
+
+    # Pivot to wide format: one row per module, columns gnn_auroc / lgbm_auroc
+    gnn = module_df[module_df["model"] == "GNN"][
+        ["held_out_module", "auroc_mean", "auroc_std"]
+    ].rename(columns={"auroc_mean": "gnn_auroc", "auroc_std": "gnn_std"})
+
+    lgbm = module_df[module_df["model"] == "LightGBM"][
+        ["held_out_module", "auroc_mean", "auroc_std"]
+    ].rename(columns={"auroc_mean": "lgbm_auroc", "auroc_std": "lgbm_std"})
+
+    wide = gnn.merge(lgbm, on="held_out_module", how="outer").sort_values(
+        "gnn_auroc", ascending=True  # ascending for horizontal barh (top = highest)
+    ).reset_index(drop=True)
+
+    modules = wide["held_out_module"].tolist()
+    n = len(modules)
+    y = np.arange(n)
+    height = 0.35
+
+    gnn_means = wide["gnn_auroc"].fillna(0).tolist()
+    gnn_stds = wide["gnn_std"].fillna(0).tolist()
+    lgbm_means = wide["lgbm_auroc"].fillna(0).tolist()
+    lgbm_stds = wide["lgbm_std"].fillna(0).tolist()
+
+    fig, ax = plt.subplots(figsize=(9, max(4, 1.0 * n)))
+
+    bars_gnn = ax.barh(
+        y + height / 2, gnn_means, height,
+        xerr=gnn_stds, label="GNN", color="#3b82d4",
+        error_kw={"elinewidth": 1.2, "capsize": 3},
+    )
+    bars_lgbm = ax.barh(
+        y - height / 2, lgbm_means, height,
+        xerr=lgbm_stds, label="LightGBM", color="#7c5cd8",
+        error_kw={"elinewidth": 1.2, "capsize": 3},
+    )
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(modules)
+    ax.set_xlabel("AUROC (mean ± 1 std across seeds × folds)")
+    ax.set_title("LCPO AUROC by Module — GNN vs LightGBM")
+    ax.legend(loc="lower right")
+    ax.set_xlim(left=0)
+
+    fig.tight_layout()
+    out_path = FIGURES_DIR / "fig_module_summary.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved {out_path}")
+
+
+def make_course_diagnostics_figure(diag_df: pd.DataFrame) -> None:
+    """2×3 grid of scatter plots: each diagnostic factor vs. GNN AUROC mean.
+
+    Points are coloured by module; a linear trendline is added per panel.
+    Saves to results/graph/figures/fig_course_diagnostics.png.
+
+    Parameters
+    ----------
+    diag_df : pd.DataFrame
+        Output of course_diagnostics.build_course_diagnostics() — must contain
+        columns: gnn_auroc_mean, held_out_module, and at least one factor column.
+    """
+    factors = [
+        ("n_test", "Sample size (n_test)"),
+        ("at_risk_rate", "At-risk rate"),
+        ("n_assessments", "# assessments"),
+        ("mean_clicks_per_student", "Mean VLE clicks / student"),
+        ("student_overlap_rate", "Student overlap rate"),
+        ("dist_shift", "Distribution shift (cosine)"),
+    ]
+
+    modules = sorted(diag_df["held_out_module"].dropna().unique())
+    palette = sns.color_palette("tab10", n_colors=max(len(modules), 1))
+    mod_colour = {m: palette[i] for i, m in enumerate(modules)}
+
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    axes_flat = axes.flatten()
+
+    for ax, (col, label) in zip(axes_flat, factors):
+        if col not in diag_df.columns:
+            ax.set_visible(False)
+            continue
+
+        subset = diag_df[["held_out_module", col, "gnn_auroc_mean"]].dropna()
+
+        if subset.empty:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(label)
+            continue
+
+        for mod in modules:
+            m_data = subset[subset["held_out_module"] == mod]
+            ax.scatter(
+                m_data[col],
+                m_data["gnn_auroc_mean"],
+                label=mod,
+                color=mod_colour[mod],
+                s=60,
+                alpha=0.85,
+                zorder=3,
+            )
+
+        # Linear trendline across all modules
+        x_vals = subset[col].values
+        y_vals = subset["gnn_auroc_mean"].values
+        if len(x_vals) >= 2 and np.std(x_vals) > 0:
+            coeffs = np.polyfit(x_vals, y_vals, 1)
+            x_line = np.linspace(x_vals.min(), x_vals.max(), 100)
+            ax.plot(x_line, np.polyval(coeffs, x_line), color="#57606a", lw=1.5, ls="--", zorder=2)
+
+            # Pearson r annotation
+            r = float(np.corrcoef(x_vals, y_vals)[0, 1])
+            ax.annotate(
+                f"r = {r:.2f}",
+                xy=(0.05, 0.93),
+                xycoords="axes fraction",
+                fontsize=9,
+                color="#57606a",
+            )
+
+        ax.set_xlabel(label, fontsize=10)
+        ax.set_ylabel("GNN AUROC (mean)", fontsize=10)
+        ax.set_title(label, fontsize=11, fontweight="bold")
+
+    # Shared legend (modules)
+    handles = [
+        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=mod_colour[m],
+                   markersize=8, label=m)
+        for m in modules
+    ]
+    fig.legend(handles=handles, title="Module", loc="lower center",
+               ncol=len(modules), bbox_to_anchor=(0.5, -0.02), fontsize=9)
+
+    fig.suptitle(
+        "Course-Level Diagnostic Factors vs. GNN AUROC (LCPO)", fontsize=13
+    )
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+    out_path = FIGURES_DIR / "fig_course_diagnostics.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved {out_path}")
+
+
 def make_main_comparison_table(comparison_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for split_type, split_label, model_names in [
@@ -292,6 +458,27 @@ def make_main_comparison_table(comparison_df: pd.DataFrame) -> pd.DataFrame:
                 row[metric.upper()] = fmt_mean_std(mean, std)
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def make_cross_dataset_figure(combined_df: pd.DataFrame) -> None:
+    """Produce a faceted AUROC comparison figure for multiple datasets.
+
+    Parameters
+    ----------
+    combined_df : DataFrame with columns: dataset, model, split_type, auroc
+        Must contain at least 2 unique dataset values.
+
+    Outputs
+    -------
+    results/graph/figures/fig_cross_dataset.png
+    """
+    # Stub — to be implemented once a second dataset's results are available.
+    # When implemented: produce a grouped bar chart faceted by split_type,
+    # with one bar pair (GNN vs LightGBM) per dataset per facet.
+    raise NotImplementedError(
+        "make_cross_dataset_figure() requires results from at least 2 datasets. "
+        "Run the XuetangX pipeline first."
+    )
 
 
 def main() -> None:
@@ -318,6 +505,16 @@ def main() -> None:
     save_table(week_table, "table_week_performance")
     save_table(ablation_table, "table_ablation")
     save_table(course_table, "table_course_variation")
+
+    # Module summary figure (guard: only if the CSV exists)
+    if MODULE_SUMMARY_PATH.exists():
+        module_df = load_csv(MODULE_SUMMARY_PATH)
+        make_module_summary_figure(module_df)
+
+    # Course diagnostics figure (guard: only if the CSV exists)
+    if DIAGNOSTICS_PATH.exists():
+        diag_df = load_csv(DIAGNOSTICS_PATH)
+        make_course_diagnostics_figure(diag_df)
 
     print(f"Saved figures to {FIGURES_DIR}")
     print(f"Saved tables to {TABLES_DIR}")
