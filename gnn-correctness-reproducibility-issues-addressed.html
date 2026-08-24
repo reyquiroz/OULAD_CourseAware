@@ -1,0 +1,438 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GNN Correctness &amp; Reproducibility — Issues Addressed</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background: #ffffff;
+    color: #1f2328;
+    padding: 40px 24px 60px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+
+  /* Header */
+  .header { margin-bottom: 32px; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; }
+  .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  .header .meta { font-size: 12px; color: #57606a; }
+  .header .meta span { margin-right: 20px; }
+
+  /* Design decisions table */
+  .decisions { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 16px 20px; margin-bottom: 32px; }
+  .decisions h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #57606a; margin-bottom: 12px; }
+  .decisions table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .decisions td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  .decisions td:first-child { font-weight: 600; white-space: nowrap; color: #3b82d4; width: 180px; }
+  .decisions tr:last-child td { border-bottom: none; }
+
+  /* Issue cards */
+  .issues { display: flex; flex-direction: column; gap: 20px; }
+  .card { border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+  .card-header { display: flex; align-items: flex-start; gap: 12px; padding: 14px 18px; background: #f7f8fa; border-bottom: 1px solid #e5e7eb; }
+  .badge-num { flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: #1f2328; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .card-header-text { flex: 1; }
+  .card-title { font-size: 15px; font-weight: 700; line-height: 1.3; }
+  .card-subtitle { font-size: 12px; color: #57606a; margin-top: 2px; }
+  .badge-done { flex-shrink: 0; background: #1a7f37; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; margin-top: 3px; letter-spacing: .03em; }
+
+  .card-body { padding: 14px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 560px) { .card-body { grid-template-columns: 1fr; } }
+
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #57606a; margin-bottom: 6px; }
+  .problem p, .solution p { font-size: 13px; line-height: 1.55; color: #1f2328; }
+
+  .changes { padding: 0 18px 14px; border-top: 1px solid #f0f1f3; padding-top: 12px; }
+  .change-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .change-list li { font-size: 12.5px; color: #1f2328; display: flex; gap: 8px; align-items: baseline; }
+  .change-list li::before { content: "→"; color: #3b82d4; flex-shrink: 0; font-weight: 700; }
+  code { font-family: "SF Mono", "Fira Code", monospace; font-size: 11.5px; background: #f0f1f3; padding: 1px 5px; border-radius: 3px; }
+
+  /* Test summary */
+  .test-summary { margin-top: 32px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+  .test-summary .ts-header { background: #f7f8fa; border-bottom: 1px solid #e5e7eb; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; }
+  .test-summary .ts-header h2 { font-size: 14px; font-weight: 700; }
+  .test-count { background: #1a7f37; color: #fff; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
+  .test-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 560px) { .test-grid { grid-template-columns: 1fr 1fr; } }
+  .test-file { padding: 10px 16px; border-right: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; }
+  .test-file:nth-child(3n) { border-right: none; }
+  .test-file .tf-name { font-size: 12px; font-weight: 600; font-family: "SF Mono","Fira Code",monospace; color: #3b82d4; margin-bottom: 2px; }
+  .test-file .tf-desc { font-size: 11.5px; color: #57606a; }
+  .test-file .tf-count { font-size: 11px; font-weight: 700; color: #1a7f37; margin-top: 3px; }
+
+  /* Files changed */
+  .files-changed { margin-top: 24px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+  .files-changed .fc-header { background: #f7f8fa; border-bottom: 1px solid #e5e7eb; padding: 12px 18px; font-size: 14px; font-weight: 700; }
+  .file-row { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 18px; border-bottom: 1px solid #f0f1f3; font-size: 12.5px; }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .fn { font-family: "SF Mono","Fira Code",monospace; color: #1f2328; }
+  .file-row .fstat { font-size: 11.5px; color: #57606a; }
+  .tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-right: 6px; text-transform: uppercase; }
+  .tag-new { background: #dafbe1; color: #1a7f37; }
+  .tag-mod { background: #fff8c5; color: #9a6700; }
+
+  /* Footer */
+  footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 12px; color: #57606a; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  
+  <div class="header">
+    <h1>GNN Correctness &amp; Reproducibility — Issues Addressed</h1>
+    <div class="meta">
+      <span><strong>Project:</strong> OULAD GraphSAGE At-Risk Prediction</span>
+      <span><strong>Commit:</strong> 306c2cc</span>
+      <span><strong>Tests:</strong> 42 passed, 0 failed</span>
+    </div>
+  </div>
+
+  
+  <div class="decisions">
+    <h2>Confirmed Design Decisions</h2>
+    <table>
+      <tr>
+        <td>Graph separation</td>
+        <td>Inductive subgraph: held-out / val / test <code>enrolled_in</code> edges excluded from training message-passing. Val/test inference uses the full graph (transductive).</td>
+      </tr>
+      <tr>
+        <td>Student representation</td>
+        <td>Three <code>pyg_scatter</code> injections removed. <code>submitted</code> and <code>interacted_with</code> edges contribute via message-passing topology only. <code>enrolled_in</code> edge attributes projected into the edge prediction head.</td>
+      </tr>
+      <tr>
+        <td>LCPO model seeds</td>
+        <td>5 model seeds per fold <code>[42, 123, 7, 17, 99]</code>. Val-student sampling RNG keyed on fold index only — fully decoupled from model seed.</td>
+      </tr>
+    </table>
+  </div>
+
+  
+  <div class="issues">
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">1</div>
+        <div class="card-header-text">
+          <div class="card-title">Training graph included held-out information</div>
+          <div class="card-subtitle">Message-passing separation · src/gnn_model.py · src/run_gnn_experiment.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>The full heterogeneous graph — including validation and test student nodes, their <code>enrolled_in</code> edges, and their submission/interaction edges — was passed through the GNN during every training forward pass. Only the loss was masked to training rows, so held-out students influenced learned representations via message-passing.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p>New <code>build_train_subgraph(data, train_mask)</code> returns a copy of the graph with <code>enrolled_in</code>, <code>submitted</code>, and <code>interacted_with</code> edges filtered to training students only. The training loop uses this subgraph for loss computation; the full graph is used only for validation and test inference.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li>Added <code>build_train_subgraph()</code> in <code>gnn_model.py</code> — filters 3 edge types to training student indices; preserves all node features and structural edges</li>
+          <li>Refactored <code>run_training_loop(model, train_subgraph, full_data, val_mask, …)</code> — forward pass uses subgraph; validation uses full graph</li>
+          <li>Updated both <code>run_random_split_experiment()</code> and <code>run_lcpo_experiment()</code> to build and pass the subgraph</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">2</div>
+        <div class="card-header-text">
+          <div class="card-title">Normalisation computed on the full graph</div>
+          <div class="card-subtitle">Feature leakage · src/gnn_model.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p><code>_normalize_numeric_features()</code> computed mean and standard deviation over all 32,593 enrollments before any split was applied. Normalisation statistics therefore incorporated validation and test data, leaking future information into training.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p><code>_normalize_numeric_features(data, train_edge_mask=None)</code> now derives statistics from training rows only when a mask is provided. The computed parameters are then applied to all rows. Structural nodes (course_presentation, assessment, VLE resource) are normalised globally — documented in code. Callers pass <code>skip_normalize=True</code> to <code>GraphDataLoader</code> and normalise after building the split mask.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li><code>enrolled_in</code> edge attrs: stats from <code>edge_attr[train_edge_mask]</code> only</li>
+          <li><code>submitted</code> / <code>interacted_with</code> edges: stats from training-student rows only</li>
+          <li>Student node features: stats from training-student node subset</li>
+          <li>Added <code>GraphDataLoader(skip_normalize=True)</code> flag for deferred normalisation</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">3</div>
+        <div class="card-header-text">
+          <div class="card-title">Student representation mixed cross-course information</div>
+          <div class="card-subtitle">Representation leakage · EnrollmentGNN architecture · src/gnn_model.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>Three <code>pyg_scatter</code> calls aggregated edge attributes from all of a student's enrollments — across all courses — into a single shared student-node representation between conv layers. A student enrolled in multiple courses received a representation that mixed course-specific and potentially future-course information.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p>The scatter injections are removed. <code>enrolled_in</code> edge attributes are now projected per-edge via <code>ei_attr_proj</code> and concatenated with the student and course-presentation embeddings in the edge prediction head: <code>[h_student ‖ h_course ‖ proj(ei_attr)]</code> → Linear → logit. Each enrollment prediction is independent.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li>Removed <code>enrollment_attr_proj</code>, <code>submitted_attr_proj</code>, <code>interacted_with_attr_proj</code> modules</li>
+          <li>Added <code>ei_attr_proj = nn.Linear(n_enrolled_in_attr, hidden_dim)</code></li>
+          <li>Edge head input dimension: <code>hidden_dim × 3</code> (student + course + ei_attr projection)</li>
+          <li><code>submitted</code> / <code>interacted_with</code> topology still present for message-passing</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">4</div>
+        <div class="card-header-text">
+          <div class="card-title">LightGBM comparison not fully matched</div>
+          <div class="card-subtitle">Feature parity · threshold alignment · src/compare_gnn_lgbm.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>LightGBM received 7 features while the GNN used richer enrollment-scoped inputs. LightGBM trained on the combined train+val set, used no val set for early stopping, and applied a fixed 0.5 decision threshold — unlike the GNN's F1-maximising threshold on the val set.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p>LightGBM now reads <code>age_band</code> (one-hot) and <code>studied_credits</code> from the enrolled_in artifact parquet, matching the GNN's edge attributes. It trains on the train split only and uses the same val-set <code>select_threshold()</code> procedure as the GNN. LCPO uses a 10% val draw per fold with the same RNG protocol.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li>New <code>build_enrolled_in_features(week)</code> reads artifact parquet for <code>age_band</code>, <code>studied_credits</code></li>
+          <li><code>run_lgbm_random_split()</code>: trains on train-only, tunes threshold on val via <code>select_threshold()</code></li>
+          <li><code>run_lgbm_lcpo()</code>: 10% val draw per fold matching GNN LCPO protocol</li>
+          <li><code>_compute_metrics(threshold=)</code> kwarg for tuned threshold propagation</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">5</div>
+        <div class="card-header-text">
+          <div class="card-title">LCPO used one model seed per fold with conflated RNGs</div>
+          <div class="card-subtitle">Variance estimation · reproducibility · src/run_gnn_experiment.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>Each LCPO fold trained exactly one model using a seed derived from <code>SEED + fold_idx</code>. The same value controlled both the val-student sampling RNG and the model weight initialisation, so these two sources of randomness could not be analysed independently.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p><code>run_lcpo_experiment(model_seeds=[42, 123, 7, 17, 99])</code> now runs 5 model seeds per fold. The val-student sampling RNG is keyed on <code>fold_idx</code> alone — so the same validation set is used across all 5 seeds within a fold. Results include per-seed rows and fold-level mean ± std.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li>Inner <code>for mseed in model_seeds</code> loop per fold; <code>torch.manual_seed(mseed)</code> before each model init</li>
+          <li>Val RNG: <code>np.random.default_rng(fold_idx)</code> — decoupled from model seed</li>
+          <li><code>lcpo_results.csv</code> gains <code>model_seed</code> column (one row per fold × seed)</li>
+          <li><code>lcpo_summary.csv</code> reports <code>{metric}_mean</code> and <code>{metric}_std</code> per fold</li>
+          <li><code>--model-seeds</code> CLI argument added</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">6</div>
+        <div class="card-header-text">
+          <div class="card-title">Result files inconsistent and reproduction script unsafe</div>
+          <div class="card-subtitle">Reproducibility · src/run_gnn_experiment.py · scripts/reproduce_all.sh</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>Training curve filenames omitted week and seed, so multi-week or multi-seed runs silently overwrote earlier files. Result CSVs were overwritten on every run. The reproduction script offered no guard against missing graph artifacts, causing cryptic failures mid-run.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p>Training curves are now namespaced per week, seed, and loss-weighting. Result CSVs use an append-safe pattern (read–concat–deduplicate–write). The reproduction script checks for required parquet artifacts before starting experiments and aborts with instructions if they are absent.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li>Curve filename: <code>training_curves_random_student_week{N}_seed{S}_{weighting}.npz</code></li>
+          <li>LCPO curves: <code>training_curves_lcpo_fold{F}_seed{S}.npz</code></li>
+          <li><code>_append_or_create_csv(df, path, dedup_keys)</code> helper — safe re-runs</li>
+          <li>Preflight check in <code>reproduce_all.sh</code> aborts if <code>week08_enrollments.parquet</code> missing</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">7</div>
+        <div class="card-header-text">
+          <div class="card-title">Result files and manuscript statements inconsistent</div>
+          <div class="card-subtitle">Single source of truth · src/generate_report_figures.py · src/verify_results.py</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>Multiple CSV files (<code>random_student_results.csv</code>, <code>lcpo_results.csv</code>, <code>comparison_results.csv</code>) could diverge if regenerated independently. Figure and table generation read from multiple sources with no consistency guarantee. Course-level win count was reported as 19/22 while the CSV showed 18/22.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p><code>generate_report_figures.py</code> now reads exclusively from <code>comparison_results.csv</code>. A new <code>verify_results.py</code> script recomputes every aggregate from that file and diffs it against <code>results/graph/tables/</code>, exiting non-zero on any discrepancy &gt; 10<sup>−4</sup>. <code>compare_gnn_lgbm.py</code> gains a <code>--from-csv</code> flag to rebuild the comparison file without re-running the GNN.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li><code>generate_report_figures.py</code>: single read from <code>comparison_results.csv</code>; hard error if missing</li>
+          <li>New <code>src/verify_results.py</code>: recomputes means, stds, win counts and diffs against tables/</li>
+          <li><code>compare_gnn_lgbm.py --from-csv</code>: rebuilds combined CSV from existing GNN results + fresh LightGBM</li>
+        </ul>
+      </div>
+    </div>
+
+    
+    <div class="card">
+      <div class="card-header">
+        <div class="badge-num">8</div>
+        <div class="card-header-text">
+          <div class="card-title">Tests did not cover the most important risks</div>
+          <div class="card-subtitle">Test coverage · tests/ (6 new files)</div>
+        </div>
+        <div class="badge-done">FIXED</div>
+      </div>
+      <div class="card-body">
+        <div class="problem">
+          <div class="section-label">Problem</div>
+          <p>The 29 existing tests covered split correctness and filter boundaries but left critical risks untested: training-only normalisation, held-out graph isolation, cross-course aggregation invariance, label alignment after subgraph filtering, full-model training convergence, and LCPO fallback val-sampling behaviour.</p>
+        </div>
+        <div class="solution">
+          <div class="section-label">Fix</div>
+          <p>13 new tests across 6 files cover all identified risk areas using in-memory toy graphs only — no parquet files required, total runtime &lt; 6 s. The fallback val-sampling logic was extracted to <code>_sample_lcpo_val()</code> to make it unit-testable.</p>
+        </div>
+      </div>
+      <div class="changes">
+        <ul class="change-list">
+          <li><code>test_normalization.py</code> — train-mask stats differ from global; zero-mean on training slice; student subset</li>
+          <li><code>test_subgraph.py</code> — held-out students absent from subgraph; y length; no in-place mutation</li>
+          <li><code>test_no_cross_course.py</code> — perturbing held-out edge attrs leaves training logits unchanged</li>
+          <li><code>test_label_alignment.py</code> — label order preserved before and after subgraph filtering</li>
+          <li><code>test_training_smoke.py</code> — loss decreases over 5 epochs; logit count matches training edges</li>
+          <li><code>test_validation_fallback.py</code> — fallback triggers when val positives &lt; 20; train/val disjoint</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  
+  <div class="test-summary">
+    <div class="ts-header">
+      <h2>Test Suite — Final State</h2>
+      <div class="test-count">42 passed · 0 failed</div>
+    </div>
+    <div class="test-grid">
+      <div class="test-file">
+        <div class="tf-name">test_filter_window.py</div>
+        <div class="tf-desc">Temporal dual-guard boundary conditions (VLE &amp; assessment)</div>
+        <div class="tf-count">11 tests</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_splits.py</div>
+        <div class="tf-desc">random_student_split and lcpo_split correctness</div>
+        <div class="tf-count">13 tests</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_gnn_data_flow.py</div>
+        <div class="tf-desc">Edge attr shape, prediction head alignment, LCPO masking</div>
+        <div class="tf-count">5 tests</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_normalization.py</div>
+        <div class="tf-desc">Train-only stats; backward compat; student node subset</div>
+        <div class="tf-count">4 tests · new</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_subgraph.py</div>
+        <div class="tf-desc">Held-out students absent; y length; no in-place mutation</div>
+        <div class="tf-count">3 tests · new</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_no_cross_course.py</div>
+        <div class="tf-desc">Held-out edge perturbation does not affect training logits</div>
+        <div class="tf-count">1 test · new</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_label_alignment.py</div>
+        <div class="tf-desc">Label order correct before and after subgraph filtering</div>
+        <div class="tf-count">2 tests · new</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_training_smoke.py</div>
+        <div class="tf-desc">Loss decreases; logit count matches training edge count</div>
+        <div class="tf-count">1 test · new</div>
+      </div>
+      <div class="test-file">
+        <div class="tf-name">test_validation_fallback.py</div>
+        <div class="tf-desc">Fallback triggers; train/val student sets disjoint</div>
+        <div class="tf-count">2 tests · new</div>
+      </div>
+    </div>
+  </div>
+
+  
+  <div class="files-changed">
+    <div class="fc-header">Files Changed (commit 306c2cc)</div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>src/gnn_model.py</span><span class="fstat">train-mask norm · build_train_subgraph · ei_attr_proj · edge head dim</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>src/run_gnn_experiment.py</span><span class="fstat">subgraph training · LCPO multi-seed · append-safe CSVs · namespaced curves</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>src/compare_gnn_lgbm.py</span><span class="fstat">age_band + studied_credits · train-only fit · val threshold · --from-csv</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>src/generate_report_figures.py</span><span class="fstat">reads only comparison_results.csv · hard error if missing</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>src/verify_results.py</span><span class="fstat">recomputes aggregates from comparison_results.csv · diffs against tables/</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>scripts/reproduce_all.sh</span><span class="fstat">preflight artifact check before GNN experiments</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_normalization.py</span><span class="fstat">4 tests</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_subgraph.py</span><span class="fstat">3 tests</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_no_cross_course.py</span><span class="fstat">1 test</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_label_alignment.py</span><span class="fstat">2 tests</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_training_smoke.py</span><span class="fstat">1 test</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>tests/test_validation_fallback.py</span><span class="fstat">2 tests</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-mod">mod</span>AGENTS.md</span><span class="fstat">project guidance for AI assistants</span></div>
+    <div class="file-row"><span class="fn"><span class="tag tag-new">new</span>gnn-correctness-plan.md</span><span class="fstat">design decisions and sub-task breakdown</span></div>
+  </div>
+
+</div>
+<footer>Made with IBM Bob</footer>
+</body>
+</html>
