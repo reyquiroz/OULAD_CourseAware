@@ -338,7 +338,7 @@ be explicitly handled and documented as dataset-specific limitations, not silent
 
 ## Sub-Task 8 — Zenodo Dataset Results Notebooks
 
-**Status:** `[ ] pending`
+**Status:** `[x] complete`
 *Prerequisite: Sub-Task 7 complete (external dataset pipeline and results CSVs exist)*
 
 ### Intent
