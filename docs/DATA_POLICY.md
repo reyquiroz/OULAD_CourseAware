@@ -57,6 +57,32 @@ See also the **Data Directory Policy** section in `CONTRIBUTING.md`.
 
 ---
 
+## Candidate External Dataset — Zenodo Record 17087849
+
+**Status: Under assessment — not yet approved for use**
+
+| Field | Value |
+|-------|-------|
+| Record URL | https://zenodo.org/records/17087849 |
+| DOI | 10.5281/zenodo.17087849 |
+| Institution | KU Leuven (Tiukhova et al., 2024) — Blackboard LMS |
+| Courses | Accountancy, Global economics (2018–19, 2019–20, 2020–21) |
+| Access date | September 2025 |
+| License | ⚠️ Pending confirmation from Zenodo record page (CC BY assumed) |
+| Re-identification risk | Low — all student identifiers are anonymised integer USER_IDs; no names, emails, or postcodes present |
+| Feasibility verdict | ⚠️ CONDITIONAL GO — see `docs/zenodo_dataset_feasibility.md` for full assessment and scope reductions required |
+
+**This dataset must not be used for analysis or results publication until:**
+
+1. License is confirmed as CC BY or equivalent on the Zenodo record page.
+2. Supervisor has explicitly approved the CONDITIONAL GO verdict and scope reductions.
+3. OULAD LightGBM baseline has been re-run on the 3-feature VLE-only set for fair comparison.
+
+Data files are stored in `data/Zenodo/` (gitignored). No Zenodo data files
+are committed to this repository.
+
+---
+
 ## Canvas Authorization and IRB
 
 This project **does not currently use any Canvas data or data collected

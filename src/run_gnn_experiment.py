@@ -63,8 +63,18 @@ def _append_or_create_csv(new_df: pd.DataFrame, path: str, dedup_keys: list) -> 
     combined.to_csv(path, index=False)
 
 
-def _build_model_and_optimizer(data):
-    """Construct a fresh EnrollmentGNN and Adam optimizer."""
+def _build_model_and_optimizer(data, use_interacted_with_attrs: bool = False):
+    """Construct a fresh EnrollmentGNN and Adam optimizer.
+
+    Parameters
+    ----------
+    data : HeteroData
+        Full heterogeneous graph; used to infer input channel dimensions.
+    use_interacted_with_attrs : bool
+        Passed through to ``EnrollmentGNN``.  When True, the model projects
+        ``interacted_with`` edge attributes into the student embeddings.
+        Default False (topology-only; preserves current behaviour).
+    """
     in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
     ei_key = ("student", "enrolled_in", "course_presentation")
     n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
@@ -73,6 +83,7 @@ def _build_model_and_optimizer(data):
         in_channels_dict=in_channels_dict,
         hidden_dim=HIDDEN_DIM,
         n_enrolled_in_attr=n_enrolled_in_attr,
+        use_interacted_with_attrs=use_interacted_with_attrs,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     return model, optimizer
@@ -291,6 +302,7 @@ def run_random_split_experiment(
     weighted: bool = True,
     seed: int = SEED,
     feature_mask=None,
+    use_interacted_with_attrs: bool = False,
 ):
     """Train and evaluate EnrollmentGNN on a 70/10/20 random-student split.
 
@@ -306,6 +318,9 @@ def run_random_split_experiment(
     feature_mask : list[str] | None
         Ablation conditions to apply (e.g. ["no_vle"]).  Passed through to
         GraphDataLoader so the correct features are zeroed before training.
+    use_interacted_with_attrs : bool
+        If True, pass the ``interacted_with`` edge attributes into the model
+        for the ablation condition ``"with_iw_attrs"``.  Default False.
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -326,11 +341,13 @@ def run_random_split_experiment(
     val_mask   = torch.tensor(_val_s.values,   dtype=torch.bool)
     test_mask  = torch.tensor(_test_s.values,  dtype=torch.bool)
 
-    # Normalize using training-set statistics only to prevent leakage.
+    # Train-only normalization: stats computed from train mask only to prevent leakage
+    # into test/val data. See _normalize_numeric_features() in gnn_model.py.
     # Note: _apply_feature_mask was already applied by load(); only normalise here.
     data = _normalize_numeric_features(data, train_edge_mask=train_mask)
 
-    # Build inductive training subgraph (held-out students excluded from message-passing)
+    # Inductive evaluation: only training enrollment edges are visible during message
+    # passing. Test node features are present but test edges are never in the training graph.
     train_subgraph = build_train_subgraph(data, train_mask)
 
     # Class-weighting (or None for unweighted run)
@@ -341,7 +358,7 @@ def run_random_split_experiment(
         pos_weight = False  # sentinel: triggers plain BCEWithLogitsLoss()
 
     # Model + optimizer — built from full data so inference channel dims are correct
-    model, optimizer = _build_model_and_optimizer(data)
+    model, optimizer = _build_model_and_optimizer(data, use_interacted_with_attrs=use_interacted_with_attrs)
 
     # Training — captures per-epoch curves
     best_val_auroc, best_epoch, train_losses, val_aurocs = run_training_loop(
@@ -384,6 +401,7 @@ def run_random_split_experiment(
         "best_val_auroc": best_val_auroc,
         "best_epoch": best_epoch,
         "best_threshold": best_threshold,
+        "pipeline_version": "v2_corrected",
     }
 
     return row, metrics
@@ -400,6 +418,7 @@ def run_lcpo_experiment(
     max_folds: int = None,
     lcpo_patience: int = 50,
     model_seeds: list = None,
+    start_fold: int = 0,
 ):
     """Train and evaluate models per LCPO fold, running one model per seed.
 
@@ -414,6 +433,8 @@ def run_lcpo_experiment(
     model_seeds   : list of model initialisation seeds (default: [42, 123, 7, 17, 99]).
                     One independent training run is performed per seed per fold;
                     the fold result is the mean ± std across seeds.
+    start_fold    : skip all folds with fold_idx < start_fold (resumption after
+                    a partial run).  Default 0 (run all folds).
     """
     if model_seeds is None:
         model_seeds = [42, 123, 7, 17, 99]
@@ -427,6 +448,10 @@ def run_lcpo_experiment(
     enroll_df = pd.read_parquet(os.path.join(ARTIFACT_DIR, f"{w}_enrollments.parquet"))
     cp_df = pd.read_parquet(os.path.join(ARTIFACT_DIR, f"{w}_nodes_course_presentation.parquet"))
     n_enrollments = len(enroll_df)
+
+    if start_fold > 0:
+        folds_df = folds_df[folds_df["fold_idx"] >= start_fold].copy()
+        print(f"  (resuming from fold {start_fold}; skipping {start_fold} earlier folds)")
 
     if max_folds is not None:
         folds_df = folds_df.iloc[:max_folds].copy()
@@ -476,13 +501,15 @@ def run_lcpo_experiment(
         # --- Load raw graph, normalise with train mask, then mask held-out edges ---
         # Load without normalization so stats can be computed from training rows only.
         data = GraphDataLoader(week, skip_normalize=True).load()
-        # Normalize using training-fold statistics only (prevents leakage across folds).
+        # Train-only normalization: stats computed from train mask only to prevent leakage
+        # into test/val data. See _normalize_numeric_features() in gnn_model.py.
         data = _normalize_numeric_features(data, train_edge_mask=train_mask)
         # Attach week to data for use inside helper
         data._held_out_week = week
         data_masked = _mask_held_out_edges(data, cp_node_idx, enroll_df, ho_module, ho_pres)
 
-        # Build inductive training subgraph from the masked graph
+        # Inductive evaluation: only training enrollment edges are visible during message
+        # passing. Test node features are present but test edges are never in the training graph.
         train_subgraph = build_train_subgraph(data_masked, train_mask)
 
         train_y = train_subgraph[("student", "enrolled_in", "course_presentation")].y
@@ -534,6 +561,7 @@ def run_lcpo_experiment(
                 "best_val_auroc": best_val_auroc,
                 "best_epoch": best_epoch,
                 **metrics,
+                "pipeline_version": "v2_corrected",
             }
             records.append(record)
 
@@ -625,6 +653,10 @@ if __name__ == "__main__":
                         help="Quick mode: MAX_EPOCHS=5, PATIENCE=3, first 2 LCPO folds only")
     parser.add_argument("--random-only", action="store_true",
                         help="Skip LCPO; run only the random-student experiment")
+    parser.add_argument("--lcpo-only", action="store_true",
+                        help="Skip random-student experiment; run only LCPO")
+    parser.add_argument("--start-fold", type=int, default=0,
+                        help="Skip LCPO folds with fold_idx < N (for resuming a partial run). Default: 0")
     parser.add_argument("--overfit-check", action="store_true",
                         help="Run overfit sanity check before the main experiment and print result")
     parser.add_argument("--seeds", nargs="+", type=int, default=[42],
@@ -670,15 +702,16 @@ if __name__ == "__main__":
             print(f"  Overfit check final loss: {check_loss:.4f}")
 
         # --- Random-student experiment: loop over (seed × weighted/unweighted) ---
-        for seed_val in args.seeds:
-            for weighted_flag in (True, False):
-                row, metrics = run_random_split_experiment(
-                    week=week, max_epochs=epochs, patience=pat,
-                    weighted=weighted_flag, seed=seed_val,
-                )
-                all_random_rows.append(row)
-                if random_metrics is None and weighted_flag:
-                    random_metrics = metrics  # first seed, weighted — for _print_summary
+        if not args.lcpo_only:
+            for seed_val in args.seeds:
+                for weighted_flag in (True, False):
+                    row, metrics = run_random_split_experiment(
+                        week=week, max_epochs=epochs, patience=pat,
+                        weighted=weighted_flag, seed=seed_val,
+                    )
+                    all_random_rows.append(row)
+                    if random_metrics is None and weighted_flag:
+                        random_metrics = metrics  # first seed, weighted — for _print_summary
 
         if not args.random_only:
             lcpo_patience_val = 3 if args.quick else args.lcpo_patience
@@ -686,6 +719,7 @@ if __name__ == "__main__":
                 week=week, max_epochs=epochs, patience=pat,
                 max_folds=max_folds, lcpo_patience=lcpo_patience_val,
                 model_seeds=args.model_seeds,
+                start_fold=args.start_fold,
             )
             if not week_lcpo_df.empty:
                 all_lcpo_dfs.append(week_lcpo_df)
@@ -693,13 +727,14 @@ if __name__ == "__main__":
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # --- Save random results (all weeks stacked) ---
-    out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
-    _append_or_create_csv(
-        pd.DataFrame(all_random_rows), out_path,
-        dedup_keys=["week", "seed", "loss_weighting"],
-    )
-    print(f"\n  Saved {len(all_random_rows)} rows "
-          f"({len(weeks_to_run)} week(s) × {len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
+    if all_random_rows:
+        out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
+        _append_or_create_csv(
+            pd.DataFrame(all_random_rows), out_path,
+            dedup_keys=["week", "seed", "loss_weighting"],
+        )
+        print(f"\n  Saved {len(all_random_rows)} rows "
+              f"({len(weeks_to_run)} week(s) × {len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
 
     # --- Save LCPO results (all weeks stacked) ---
     if all_lcpo_dfs:

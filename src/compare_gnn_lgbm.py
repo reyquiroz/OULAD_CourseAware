@@ -76,6 +76,10 @@ _FEATURE_COLS = [
     "studied_credits",
 ]
 
+# VLE-only subset — used for cross-dataset comparison with Zenodo
+# (which has no assessment or demographic data)
+_FEATURE_COLS_VLE_ONLY = ["vle_total", "vle_mean", "vle_std"]
+
 # Cache so we don't reload CSV files multiple times within one run
 _DATA_CACHE: dict = {}
 
@@ -125,7 +129,10 @@ def build_enrolled_in_features(week: int) -> pd.DataFrame:
     return result
 
 
-def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
+def build_tabular_features(
+    week: int,
+    feature_set: str = "full",
+) -> tuple[pd.DataFrame, pd.Series]:
     """Build the feature matrix and labels for *week*.
 
     Replicates exactly what ``create_datasets()`` does in ``oulad_data.py``:
@@ -135,6 +142,16 @@ def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
     Also merges in enrollment-scoped features from the enrolled_in edge
     artifact (``age_band`` one-hot columns and ``studied_credits``) so that
     LightGBM receives the same features as the GNN edge prediction head.
+
+    Parameters
+    ----------
+    week : int
+        Prediction week.
+    feature_set : {"full", "vle_only"}
+        Feature subset to use.  ``"full"`` (default) uses all 9 OULAD features.
+        ``"vle_only"`` restricts to the 3 VLE features (``vle_total``,
+        ``vle_mean``, ``vle_std``) for fair cross-dataset comparison with
+        external datasets that lack assessment and demographic data (e.g. Zenodo).
 
     Returns
     -------
@@ -155,6 +172,17 @@ def build_tabular_features(week: int) -> tuple[pd.DataFrame, pd.Series]:
     )
     df = build_features(vle_w, assess_w, student_info)
     df = sanitize_feature_names(df)
+
+    if feature_set == "vle_only":
+        # VLE-only subset: no assessment, demographic, or enrollment-history features.
+        # Used for cross-dataset comparison with Zenodo (Tiukhova et al. 2024)
+        # which has no per-assessment scores or student demographics.
+        available_feature_cols = [c for c in _FEATURE_COLS_VLE_ONLY if c in df.columns]
+        X = df[available_feature_cols].fillna(0).copy()
+        y = df["target"].copy()
+        return X, y, df
+
+    # --- Full feature set (default) ---
 
     # age_band and studied_credits are already present in df from build_features
     # (both originate from studentInfo).  Only merge columns that are missing.
@@ -204,7 +232,7 @@ def _align_to_enrollments(df_features: pd.DataFrame, enrollments: pd.DataFrame) 
 # 3. LightGBM — random split
 # ---------------------------------------------------------------------------
 
-def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
+def run_lgbm_random_split(week: int = 8, seed: int = 42, feature_set: str = "full") -> dict:
     """Train LightGBM on a 70/10/20 random-student split.
 
     Parameters
@@ -214,6 +242,8 @@ def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
     seed : int
         Random seed used to draw the student split via ``random_student_split()``.
         Mirrors the GNN's multi-seed protocol.
+    feature_set : {"full", "vle_only"}
+        Passed through to ``build_tabular_features``.
 
     Returns
     -------
@@ -227,7 +257,7 @@ def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
     enrollments_path = _ARTIFACTS_DIR / f"week{week:02d}_enrollments.parquet"
     enrollments = pd.read_parquet(enrollments_path)
 
-    X, y, df_full = build_tabular_features(week)
+    X, y, df_full = build_tabular_features(week, feature_set=feature_set)
 
     # Align the feature rows to the canonical enrollment ordering
     feat_pos = _align_to_enrollments(df_full, enrollments)
@@ -265,7 +295,11 @@ def run_lgbm_random_split(week: int = 8, seed: int = 42) -> dict:
 # 4. LightGBM — LCPO
 # ---------------------------------------------------------------------------
 
-def run_lgbm_lcpo(week: int = 8, max_folds: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_lgbm_lcpo(
+    week: int = 8,
+    max_folds: int | None = None,
+    feature_set: str = "full",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run LightGBM on every LCPO fold.
 
     Parameters
@@ -274,6 +308,8 @@ def run_lgbm_lcpo(week: int = 8, max_folds: int | None = None) -> tuple[pd.DataF
         Prediction week.
     max_folds : int or None
         If not None, stop after this many folds (for ``--quick`` mode).
+    feature_set : {"full", "vle_only"}
+        Passed through to ``build_tabular_features``.
 
     Returns
     -------
@@ -295,7 +331,7 @@ def run_lgbm_lcpo(week: int = 8, max_folds: int | None = None) -> tuple[pd.DataF
     enrollments = pd.read_parquet(enrollments_path)
     # Columns: id_student, code_module, code_presentation, final_result, target
 
-    X, y, df_full = build_tabular_features(week)
+    X, y, df_full = build_tabular_features(week, feature_set=feature_set)
     # Align feature rows to the canonical enrollment ordering
     feat_pos = _align_to_enrollments(df_full, enrollments)
     X_aligned = X.iloc[feat_pos].reset_index(drop=True)
@@ -445,8 +481,8 @@ def build_combined_csv(
     """Build a combined per-fold/per-seed results DataFrame.
 
     Columns: week, model, split_type, fold_or_seed, held_out_module,
-             held_out_presentation, auroc, auprc, f1, precision, recall,
-             balanced_acc.
+             held_out_presentation, feature_set, auroc, auprc, f1, precision,
+             recall, balanced_acc.
     """
     metric_keys = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
     records = []
@@ -460,6 +496,7 @@ def build_combined_csv(
             "fold_or_seed": r.get("seed", ""),
             "held_out_module": "",
             "held_out_presentation": "",
+            "feature_set": "full",
             **{k: r.get(k, float("nan")) for k in metric_keys},
         })
 
@@ -472,6 +509,7 @@ def build_combined_csv(
             "fold_or_seed": rec.get("seed", ""),
             "held_out_module": "",
             "held_out_presentation": "",
+            "feature_set": rec.get("feature_set", "full"),
             **{k: rec.get(k, float("nan")) for k in metric_keys},
         })
 
@@ -484,6 +522,7 @@ def build_combined_csv(
             "fold_or_seed": r.get("fold_idx", ""),
             "held_out_module": r.get("held_out_module", ""),
             "held_out_presentation": r.get("held_out_presentation", ""),
+            "feature_set": "full",
             **{k: r.get(k, float("nan")) for k in metric_keys},
         })
 
@@ -496,6 +535,7 @@ def build_combined_csv(
             "fold_or_seed": r.get("fold_idx", ""),
             "held_out_module": r.get("held_out_module", ""),
             "held_out_presentation": r.get("held_out_presentation", ""),
+            "feature_set": r.get("feature_set", "full"),
             **{k: r.get(k, float("nan")) for k in metric_keys},
         })
 
@@ -642,6 +682,7 @@ def main(
     quick: bool = False,
     seeds: list[int] | None = None,
     from_csv: bool = False,
+    feature_set: str = "full",
 ):
     if seeds is None:
         seeds = [42]
@@ -682,14 +723,14 @@ def main(
 
             # --- Run LightGBM random split (one run per seed) ---
             for seed_val in seeds:
-                print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}) …")
-                metrics = run_lgbm_random_split(week=wk, seed=seed_val)
-                all_lgbm_random_rows.append({"week": wk, "seed": seed_val, **metrics})
+                print(f"[compare_gnn_lgbm] Running LightGBM random split (week={wk}, seed={seed_val}, feature_set={feature_set}) …")
+                metrics = run_lgbm_random_split(week=wk, seed=seed_val, feature_set=feature_set)
+                all_lgbm_random_rows.append({"week": wk, "seed": seed_val, "feature_set": feature_set, **metrics})
                 print(f"  LightGBM random split AUROC (seed {seed_val}): {metrics['auroc']:.4f}")
 
             # --- Run LightGBM LCPO ---
-            print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} ({max_folds or 22} folds) …")
-            lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=wk, max_folds=max_folds)
+            print(f"[compare_gnn_lgbm] Running LightGBM LCPO week={wk} ({max_folds or 22} folds, feature_set={feature_set}) …")
+            lgbm_fold_df, lgbm_lcpo_summary = run_lgbm_lcpo(week=wk, max_folds=max_folds, feature_set=feature_set)
             lgbm_fold_df = lgbm_fold_df.copy()
             lgbm_fold_df["week"] = wk
             all_lgbm_fold_dfs.append(lgbm_fold_df)
@@ -767,7 +808,12 @@ def main(
         gnn_lcpo_df=gnn_lcpo_df,
         lgbm_lcpo_df=lgbm_all_fold_df,
     )
-    combined_path = _GRAPH_DIR / "comparison_results.csv"
+    # Non-default feature sets get their own file so the canonical
+    # comparison_results.csv (full features) is never overwritten.
+    if feature_set == "full":
+        combined_path = _GRAPH_DIR / "comparison_results.csv"
+    else:
+        combined_path = _GRAPH_DIR / f"comparison_results_{feature_set}.csv"
     combined_df.to_csv(combined_path, index=False)
     print(f"[compare_gnn_lgbm] Combined results CSV saved to {combined_path}")
 
@@ -810,6 +856,12 @@ if __name__ == "__main__":
         help="Build comparison_results.csv from existing GNN CSVs without re-running "
              "GNN experiments. LightGBM is re-run fresh (it is fast).",
     )
+    parser.add_argument(
+        "--feature-set", choices=["full", "vle_only"], default="full",
+        help="Feature subset for LightGBM: 'full' (default, all 9 OULAD features) or "
+             "'vle_only' (vle_total, vle_mean, vle_std only — for cross-dataset comparison "
+             "with Zenodo which lacks assessment and demographic data).",
+    )
     args = parser.parse_args()
 
     # Resolve week list
@@ -820,4 +872,10 @@ if __name__ == "__main__":
     else:
         resolved_weeks = [8]
 
-    main(weeks=resolved_weeks, quick=args.quick, seeds=args.seeds, from_csv=args.from_csv)
+    main(
+        weeks=resolved_weeks,
+        quick=args.quick,
+        seeds=args.seeds,
+        from_csv=args.from_csv,
+        feature_set=args.feature_set,
+    )

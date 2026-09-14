@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from run_gnn_experiment import run_random_split_experiment, RESULTS_DIR
 
+# "with_iw_attrs" uses the full feature set but enables interacted_with edge
+# attribute projection in the model (topology-only is the default / "full").
 CONDITIONS = [
     "full",
     "no_assessment",
@@ -27,6 +29,7 @@ CONDITIONS = [
     "no_temporal",
     "no_course_features",
     "no_edge_attrs",
+    "with_iw_attrs",
 ]
 
 
@@ -45,7 +48,10 @@ def main():
     rows = []
 
     for condition in CONDITIONS:
-        feature_mask = None if condition == "full" else [condition]
+        # "with_iw_attrs" runs the full feature set with iw edge attrs enabled.
+        # All other named conditions zero out the relevant feature group.
+        use_iw_attrs = condition == "with_iw_attrs"
+        feature_mask = None if condition in ("full", "with_iw_attrs") else [condition]
         print(f"\n{'='*60}")
         print(f"  ABLATION CONDITION: {condition}")
         print(f"{'='*60}")
@@ -56,6 +62,7 @@ def main():
                 weighted=True,
                 seed=seed,
                 feature_mask=feature_mask,
+                use_interacted_with_attrs=use_iw_attrs,
             )
             ablation_row = {
                 "condition": condition,
@@ -69,6 +76,7 @@ def main():
                 "recall": row["recall"],
                 "balanced_acc": row["balanced_acc"],
                 "best_threshold": row["best_threshold"],
+                "pipeline_version": "v2_corrected",
             }
             rows.append(ablation_row)
             print(

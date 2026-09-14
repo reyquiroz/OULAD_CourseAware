@@ -1,0 +1,17 @@
+{
+  "dataset": "zenodo_17087849",
+  "week": 8,
+  "enrollment_count": 4280,
+  "random_student_split": {
+    "seed": 42,
+    "val_frac": 0.1,
+    "test_frac": 0.2,
+    "n_train": 3008,
+    "n_val": 421,
+    "n_test": 851
+  },
+  "lcpo": {
+    "n_folds": 6,
+    "folds_file": "week08_lcpo_folds.csv"
+  }
+}

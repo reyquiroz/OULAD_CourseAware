@@ -1,0 +1,29 @@
+{
+  "dataset": "zenodo_17087849",
+  "institution": "KU Leuven (Tiukhova et al., 2024)",
+  "week": 8,
+  "window_days": 56,
+  "supervised_unit": "enrollment (id_student, code_module, code_presentation)",
+  "label_definition": "PASSED==0 \u2192 at-risk (target=1); PASSED==1 \u2192 success (target=0)",
+  "gaps": [
+    "No assessment nodes or submitted/contains_assess edges",
+    "No student demographic features",
+    "Timestamps are calendar datetimes (not pre-computed day offsets)"
+  ],
+  "node_counts": {
+    "student": 940,
+    "course_presentation": 6,
+    "vle_resource": 1138
+  },
+  "edge_counts": {
+    "enrolled_in": 4280,
+    "has_resource": 2172,
+    "interacted_with": 278207
+  },
+  "enrollment_count": 4280,
+  "label_at_risk_count": 1450,
+  "label_success_count": 2830,
+  "label_at_risk_rate": 0.3388,
+  "elapsed_seconds": 30.24,
+  "peak_memory_mb": 1270.5
+}

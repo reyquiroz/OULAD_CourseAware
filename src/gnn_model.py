@@ -593,14 +593,44 @@ class EnrollmentGNN(nn.Module):
     - Two rounds of HeteroConv (wrapping SAGEConv per edge type)
     - Edge representation = concat(student_emb, course_emb, proj(ei_attr)) for
       each enrolled_in edge — enrollment-level conditioning without cross-course
-      aggregation.  The submitted and interacted_with edges contribute via
-      message-passing topology only; their attributes are not used in the head.
+      aggregation.  The submitted edges contribute via message-passing topology
+      only.
+    - When ``use_interacted_with_attrs=True``, the ``interacted_with`` edge
+      attributes (total_clicks, n_interactions, first_day, last_day, active_days;
+      5 features per edge) are projected and summed into the student node
+      embedding *after* message-passing, giving each student an additional
+      interaction-intensity signal without aggregating across courses.  When
+      ``False`` (default), topology-only behaviour is preserved exactly.
     - Linear output head → scalar logit → sigmoid → at-risk probability
+
+    Parameters
+    ----------
+    in_channels_dict : dict
+        Mapping from node type name to input feature dimension.
+    hidden_dim : int
+        Hidden embedding dimension (default 64).
+    out_dim : int
+        Output dimension of the prediction head (default 1).
+    n_enrolled_in_attr : int
+        Number of ``enrolled_in`` edge attribute features.  If > 0, a linear
+        projector is built and its output is concatenated into the edge head.
+    use_interacted_with_attrs : bool
+        If True, project ``interacted_with`` edge attributes and scatter-sum
+        them into the student embeddings before the prediction head.
+        Default False (topology-only; current behaviour unchanged).
     """
 
-    def __init__(self, in_channels_dict: dict, hidden_dim: int = 64, out_dim: int = 1, n_enrolled_in_attr: int = 0, **kwargs):
+    def __init__(
+        self,
+        in_channels_dict: dict,
+        hidden_dim: int = 64,
+        out_dim: int = 1,
+        n_enrolled_in_attr: int = 0,
+        use_interacted_with_attrs: bool = False,
+        **kwargs,
+    ):
         super().__init__()
-        torch.manual_seed(SEED)
+        self.use_interacted_with_attrs = use_interacted_with_attrs
 
         # Build two HeteroConv layers.  SAGEConv expects (in_channels, out_channels).
         # Layer 1: heterogeneous in → hidden
@@ -644,6 +674,12 @@ class EnrollmentGNN(nn.Module):
         # the shared student node), avoiding cross-course aggregation.
         self.ei_attr_proj = nn.Linear(n_enrolled_in_attr, hidden_dim) if n_enrolled_in_attr > 0 else None
 
+        # interacted_with edge attribute projection (optional ablation flag).
+        # Projects the 5 iw attrs (total_clicks, n_interactions, first_day,
+        # last_day, active_days) to hidden_dim, then scatter-sums per student.
+        IW_ATTR_DIM = 5  # fixed by graph_pipeline: see edges_interacted_with parquet
+        self.iw_attr_proj = nn.Linear(IW_ATTR_DIM, hidden_dim) if use_interacted_with_attrs else None
+
         # Edge-level prediction head: concat student + course_presentation + ei_attr
         # embeddings → hidden_dim * 3 input when ei_attr_proj is present, else * 2.
         head_in = hidden_dim * 3 if n_enrolled_in_attr > 0 else hidden_dim * 2
@@ -685,6 +721,26 @@ class EnrollmentGNN(nn.Module):
         h_dict = self.conv2(h_dict, ei_dict_2)
         h_dict = {k: self.act(v) for k, v in h_dict.items()}
         h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
+
+        # Optionally enrich student embeddings with interacted_with edge attrs.
+        # Each iw edge attribute vector is projected to hidden_dim and
+        # scatter-summed back to the source student node (index 0 of edge_index).
+        # This adds a per-student interaction-intensity signal that complements
+        # the topology already captured by message-passing.
+        iw_key = ("student", "interacted_with", "vle_resource")
+        if self.iw_attr_proj is not None and iw_key in data.edge_types:
+            iw_store = data[iw_key]
+            if (
+                hasattr(iw_store, "edge_attr")
+                and iw_store.edge_attr is not None
+                and iw_store.edge_attr.numel() > 0
+            ):
+                iw_src = iw_store.edge_index[0]          # (E_iw,)
+                iw_proj = self.iw_attr_proj(iw_store.edge_attr)  # (E_iw, hidden)
+                n_students = h_dict["student"].shape[0]
+                iw_agg = torch.zeros(n_students, iw_proj.shape[1], device=iw_proj.device)
+                iw_agg.scatter_add_(0, iw_src.unsqueeze(1).expand_as(iw_proj), iw_proj)
+                h_dict["student"] = h_dict["student"] + iw_agg  # residual add
 
         # Edge-level prediction on enrolled_in.
         # enrolled_in edge attributes are projected per-edge and concatenated with
@@ -789,9 +845,6 @@ def run_training_loop(
         val_aurocs   : list[float] — val AUROC per epoch (float('nan') when
                        validation set has only one class)
     """
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
-
     ei_key = ("student", "enrolled_in", "course_presentation")
     train_y = train_subgraph[ei_key].y  # labels for training edges only
     full_y = full_data[ei_key].y        # labels for full graph (used for val)

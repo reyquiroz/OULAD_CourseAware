@@ -30,9 +30,11 @@ pip install torch==2.13.0 torch-geometric==2.8.0.post1 --index-url https://downl
 Tests must be run from the **project root** (not from `src/` or `tests/`):
 
 ```bash
-pytest tests/ -v                            # all tests
-pytest tests/test_splits.py -v              # single file
-pytest tests/test_gnn_data_flow.py -v       # needs artifacts; some tests auto-skip on fresh clone
+pytest tests/ -v                                     # all tests
+pytest tests/test_splits.py -v                       # single file
+pytest tests/test_splits.py::test_no_overlap -v      # single test by name
+pytest tests/ -k "test_filter_window" -v             # single test by pattern
+pytest tests/test_gnn_data_flow.py -v                # needs artifacts; some tests auto-skip on fresh clone
 ```
 
 `sys.path.insert(0, .../src)` is done inside each test file — no `PYTHONPATH` export needed.
@@ -71,3 +73,19 @@ python src/run_graph_pipeline.py --week 8   # build week-8 graph (~6 s, ~1 GB pe
 - `black` + `flake8` are in requirements as dev tools but no config files exist — defaults apply.
 - All file paths use `pathlib.Path` via constants from `src/config.py`. Never use string concatenation for paths.
 - `RANDOM_STATE = 42` is the canonical seed; GNN experiments accept `--seeds` CLI argument.
+
+## Non-Obvious Gotchas
+
+- **Never aggregate at student level** — prediction target lives on the enrollment triple `(id_student, code_module, code_presentation)`. Adding a student-level label column or deduplicating by student is wrong.
+- **`sanitize_feature_names()` is mandatory before XGBoost/LightGBM** — call it after `pd.get_dummies()` every time. XGBoost rejects column names with special characters (brackets, `<`, `>`) which appear naturally in OULAD one-hot encoded categoricals.
+- **`gnn_model.py` hardcodes string paths** (`ARTIFACT_DIR = "results/graph/artifacts"`) and `run_gnn_experiment.py` hardcodes `RESULTS_DIR = "results/graph"` — do not follow this pattern in new code; always use the `Path` constants from `src/config.py`.
+- **`run_ablation.py` adds `src/` to `sys.path` via `sys.path.insert(0, os.path.dirname(__file__))`** — this is the only script that does this self-insertion; all others rely on caller setting `PYTHONPATH`.
+- **GNN has two distinct seed types** — `--seeds` controls the random-student *split*; `--model-seeds` (default `42 123 7 17 99`) controls model *initialisation* and applies only to LCPO folds. Conflating them produces non-reproducible comparisons.
+- **GNN prediction head logit count must equal enrolled_in edge count** (32,593 for week 8). `enrolled_in` / `rev_enrolled_in` edges are intentionally NOT filtered during LCPO masking — only `submitted`, `interacted_with`, `contains_assess`, and `has_resource` edges are filtered by destination node. Changing this breaks train/test mask alignment.
+- **Reversed edges must be kept in sync** — the heterogeneous graph stores both `enrolled_in` and `rev_enrolled_in` (and `submitted`/`interacted_with`). When masking edges for LCPO, both forward and reverse edge tensors must be updated.
+- **Normalization must use train-subset statistics** — always pass `train_edge_mask` to `_normalize_numeric_features()` in `gnn_model.py`. Omitting it silently uses global statistics, leaking test-set distribution into normalization.
+- **`matplotlib.use("Agg")` is set at import time** in `evaluation_pipeline.py` — importing it in interactive notebooks will switch the backend to non-interactive.
+- **Week numbers map to days** — week 2 → 14, week 4 → 28, week 6 → 42, week 8 → 56. Always look these up via `PREDICTION_WINDOWS` in `src/config.py`; never hardcode day values.
+- **`create_datasets()` uses `week * 7` for day conversion internally** — pass week integers (2, 4, 6, 8), not day counts.
+- **`_append_or_create_csv()` in `run_gnn_experiment.py`** deduplicates on provided keys (keep="last") when appending to results CSVs — re-running an experiment updates existing rows rather than creating duplicates.
+- **Graph artifacts are parquet, not CSV** — `materialize_graph_artifacts()` writes `.parquet` files via pyarrow. Do not convert to CSV for intermediate steps.

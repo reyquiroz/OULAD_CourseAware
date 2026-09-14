@@ -461,24 +461,72 @@ def make_main_comparison_table(comparison_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_cross_dataset_figure(combined_df: pd.DataFrame) -> None:
-    """Produce a faceted AUROC comparison figure for multiple datasets.
+    """Produce a faceted AUROC comparison figure for OULAD vs Zenodo.
 
     Parameters
     ----------
-    combined_df : DataFrame with columns: dataset, model, split_type, auroc
-        Must contain at least 2 unique dataset values.
+    combined_df : DataFrame with columns: dataset, model, split_type, auroc.
+        Expected to have at least 2 unique dataset values and both
+        "random_student" and "lcpo" split_types.
 
     Outputs
     -------
     results/graph/figures/fig_cross_dataset.png
     """
-    # Stub — to be implemented once a second dataset's results are available.
-    # When implemented: produce a grouped bar chart faceted by split_type,
-    # with one bar pair (GNN vs LightGBM) per dataset per facet.
-    raise NotImplementedError(
-        "make_cross_dataset_figure() requires results from at least 2 datasets. "
-        "Run the XuetangX pipeline first."
-    )
+    split_types = ["random_student", "lcpo"]
+    split_labels = {"random_student": "Random student", "lcpo": "LCPO"}
+    datasets = sorted(combined_df["dataset"].unique())
+    models = combined_df["model"].unique()
+
+    n_splits = len(split_types)
+    fig, axes = plt.subplots(1, n_splits, figsize=(10, 4.5), sharey=True)
+    if n_splits == 1:
+        axes = [axes]
+
+    palette = sns.color_palette("muted", n_colors=len(models))
+    model_colors = dict(zip(models, palette))
+
+    bar_width = 0.35
+    dataset_positions = {d: i for i, d in enumerate(datasets)}
+
+    for ax, stype in zip(axes, split_types):
+        subset = combined_df[combined_df["split_type"] == stype]
+        for m_idx, model in enumerate(models):
+            model_sub = subset[subset["model"] == model]
+            means, stds, positions = [], [], []
+            for ds in datasets:
+                ds_sub = model_sub[model_sub["dataset"] == ds]["auroc"]
+                m, s = mean_std(ds_sub)
+                means.append(m if not np.isnan(m) else 0.0)
+                stds.append(s if not np.isnan(s) else 0.0)
+                positions.append(dataset_positions[ds] + (m_idx - 0.5 * (len(models) - 1)) * bar_width)
+            ax.bar(
+                positions, means, bar_width,
+                yerr=stds, capsize=4,
+                color=model_colors[model], label=model, alpha=0.85,
+            )
+        ax.set_title(split_labels.get(stype, stype), fontsize=11)
+        ax.set_xticks(range(len(datasets)))
+        ax.set_xticklabels([d.upper() for d in datasets], fontsize=10)
+        ax.set_ylim(0.45, 0.90)
+        ax.axhline(0.5, color="grey", lw=0.8, linestyle="--", label="Random (0.5)")
+        ax.set_xlabel("Dataset")
+        if ax is axes[0]:
+            ax.set_ylabel("AUROC")
+            ax.legend(fontsize=9)
+
+    fig.suptitle("Cross-dataset AUROC: OULAD vs Zenodo (KU Leuven)", fontsize=12, y=1.02)
+    plt.tight_layout()
+    out = FIGURES_DIR / "fig_cross_dataset.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved {out.name}")
+
+
+# Zenodo results paths (populated by run_zenodo_pipeline.py / run_zenodo_lgbm_only.py)
+ZENODO_RESULTS_DIR = PROJECT_ROOT / "results" / "zenodo"
+ZENODO_GNN_RANDOM_PATH = ZENODO_RESULTS_DIR / "random_student_results.csv"
+ZENODO_LGBM_PATH = ZENODO_RESULTS_DIR / "comparison_results.csv"
 
 
 def main() -> None:
@@ -515,6 +563,35 @@ def main() -> None:
     if DIAGNOSTICS_PATH.exists():
         diag_df = load_csv(DIAGNOSTICS_PATH)
         make_course_diagnostics_figure(diag_df)
+
+    # Cross-dataset figure (guard: only if Zenodo results exist)
+    if ZENODO_GNN_RANDOM_PATH.exists() and ZENODO_LGBM_PATH.exists():
+        # Build combined DataFrame: OULAD rows from comparison_results.csv
+        # (week 8 only) + Zenodo GNN random + Zenodo LightGBM
+        oulad_rows = comparison_df[comparison_df["week"] == 8].copy()
+        oulad_rows["dataset"] = "oulad"
+        # OULAD comparison_results uses "model" and "split" columns
+        if "split" in oulad_rows.columns and "split_type" not in oulad_rows.columns:
+            oulad_rows = oulad_rows.rename(columns={"split": "split_type"})
+
+        zen_gnn = load_csv(ZENODO_GNN_RANDOM_PATH)
+        zen_lgbm = load_csv(ZENODO_LGBM_PATH)
+        zen_combined = pd.concat([zen_gnn, zen_lgbm], ignore_index=True)
+
+        # Normalise model column name for Zenodo LightGBM rows
+        if "model" not in zen_combined.columns:
+            zen_combined["model"] = "LightGBM"
+
+        cross_df = pd.concat(
+            [
+                oulad_rows[["dataset", "model", "split_type", "auroc"]],
+                zen_combined[["dataset", "model", "split_type", "auroc"]],
+            ],
+            ignore_index=True,
+        )
+        make_cross_dataset_figure(cross_df)
+    else:
+        print("  Skipping cross-dataset figure (Zenodo results not found)")
 
     print(f"Saved figures to {FIGURES_DIR}")
     print(f"Saved tables to {TABLES_DIR}")
