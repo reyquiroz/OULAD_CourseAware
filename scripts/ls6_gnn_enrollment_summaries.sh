@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH -t 08:00:00
-#SBATCH -A <YOUR_ALLOCATION>  # TODO: replace with your TACC allocation account
+#SBATCH -A Lonestar6
 
 module load python3/3.11.2
 source $SCRATCH/OULAD/oulad_env/bin/activate

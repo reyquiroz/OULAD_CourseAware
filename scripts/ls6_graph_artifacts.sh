@@ -6,7 +6,7 @@
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
 #SBATCH -t 00:30:00
-#SBATCH -A <YOUR_ALLOCATION>  # TODO: replace with your TACC allocation account
+#SBATCH -A Lonestar6
 
 module load python3/3.11.2
 source $SCRATCH/OULAD/oulad_env/bin/activate
