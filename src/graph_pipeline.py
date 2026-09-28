@@ -109,6 +109,7 @@ def apply_window_cutoff(
         raw["assessments"],
         window_days,
     )
+    filtered["raw_assessments"] = raw["assessments"]
     filtered["student_vle"] = vle_w
     filtered["student_assess"] = assess_w
     filtered["assessments"] = raw["assessments"][
@@ -169,6 +170,31 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
     cp = filtered["courses"][cp_cols].drop_duplicates(
         ["code_module", "code_presentation"]
     ).copy()
+
+    # Aggregate static course-level design features across unfiltered assessment and VLE tables
+    # 1. Assessments metadata
+    raw_assess = filtered.get("raw_assessments", filtered["assessments"])
+    # If raw assessments available from load_raw_tables, compute course design
+    if "raw_assessments" in filtered or "assessments" in filtered:
+        ass_all = filtered.get("raw_assessments", filtered.get("assessments"))
+        ass_grp = ass_all.groupby(["code_module", "code_presentation"])
+        n_assess = ass_grp.size().rename("n_assessments")
+        total_weight = ass_grp["weight"].sum().rename("total_assessment_weight")
+
+        # Proportions of CMA, TMA, Exam
+        cma_prop = (ass_all["assessment_type"] == "CMA").groupby([ass_all["code_module"], ass_all["code_presentation"]]).mean().rename("prop_cma")
+        tma_prop = (ass_all["assessment_type"] == "TMA").groupby([ass_all["code_module"], ass_all["code_presentation"]]).mean().rename("prop_tma")
+        exam_prop = (ass_all["assessment_type"] == "Exam").groupby([ass_all["code_module"], ass_all["code_presentation"]]).mean().rename("prop_exam")
+
+        ass_feats = pd.concat([n_assess, total_weight, cma_prop, tma_prop, exam_prop], axis=1).reset_index()
+        cp = cp.merge(ass_feats, on=["code_module", "code_presentation"], how="left")
+
+    # 2. VLE resources metadata
+    if "vle" in filtered:
+        vle_all = filtered["vle"]
+        vle_cnt = vle_all.groupby(["code_module", "code_presentation"])["id_site"].nunique().rename("n_vle_resources").reset_index()
+        cp = cp.merge(vle_cnt, on=["code_module", "code_presentation"], how="left")
+
     cp = cp.reset_index(drop=True)
     cp["node_idx"] = cp.index
     nodes["course_presentation"] = cp
@@ -244,9 +270,131 @@ def build_node_tables(filtered: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFra
 # Stage 4 — Build edge tables
 # ---------------------------------------------------------------------------
 
+def _compute_temporal_features(vle_w: pd.DataFrame, window_days: int) -> pd.DataFrame:
+    """
+    Compute derived temporal behavioral features per enrollment:
+      - weeks_active: number of distinct weeks with at least one click
+      - recency: window_days - max(date)
+      - activity_trend: linear slope of weekly click sums over week index
+      - max_inactive_gap: longest gap in days between consecutive active days
+    """
+    if vle_w.empty:
+        return pd.DataFrame(columns=[
+            "id_student", "code_module", "code_presentation",
+            "weeks_active", "recency", "activity_trend", "max_inactive_gap"
+        ])
+
+    records = []
+    # Work on copy to avoid mutating caller
+    df = vle_w[["id_student", "code_module", "code_presentation", "date", "sum_click"]].copy()
+    df["week_idx"] = np.floor(df["date"] / 7.0).astype(int)
+
+    for (s_id, c_mod, c_pres), grp in df.groupby(["id_student", "code_module", "code_presentation"]):
+        weeks_active = int(grp["week_idx"].nunique())
+        max_d = grp["date"].max()
+        recency = float(window_days - max_d)
+
+        # Weekly click sums for trend
+        weekly_sums = grp.groupby("week_idx")["sum_click"].sum().sort_index()
+        if len(weekly_sums) >= 2:
+            x_vals = weekly_sums.index.values.astype(float)
+            y_vals = weekly_sums.values.astype(float)
+            slope = float(np.polyfit(x_vals, y_vals, 1)[0])
+        else:
+            slope = 0.0
+
+        # Max gap between distinct active days
+        unique_days = np.sort(grp["date"].unique())
+        if len(unique_days) > 1:
+            max_gap = float(np.max(np.diff(unique_days)))
+        else:
+            max_gap = 0.0
+
+        records.append({
+            "id_student": s_id,
+            "code_module": c_mod,
+            "code_presentation": c_pres,
+            "weeks_active": weeks_active,
+            "recency": recency,
+            "activity_trend": slope,
+            "max_inactive_gap": max_gap,
+        })
+
+    return pd.DataFrame(records)
+
+
+def build_enrollment_node_table(
+    filtered: Dict[str, pd.DataFrame],
+    nodes: Dict[str, pd.DataFrame],
+    window_days: int = 56,
+) -> pd.DataFrame:
+    """
+    Construct the enrollment node DataFrame — one row per unique enrollment
+    (id_student, code_module, code_presentation).
+
+    Node features include:
+      - Demographics (gender, region, highest_education, imd_band, disability, age_band)
+      - Static attributes (num_of_prev_attempts, studied_credits)
+      - 6 behavioral summaries within prediction window (vle_total, vle_mean, vle_std,
+        assess_mean, assess_max, assess_count)
+
+    Returns:
+        DataFrame with 'node_idx' column as graph index.
+    """
+    ei = filtered["student_info"][
+        ["id_student", "code_module", "code_presentation",
+         "gender", "region", "highest_education", "imd_band", "disability",
+         "age_band", "num_of_prev_attempts", "studied_credits"]
+    ].drop_duplicates(["id_student", "code_module", "code_presentation"]).copy()
+
+    # Per-enrollment behavioral aggregates within prediction window
+    vle_w = filtered["student_vle"]
+    if not vle_w.empty:
+        vle_agg = vle_w.groupby(
+            ["id_student", "code_module", "code_presentation"]
+        ).agg(
+            vle_total=("sum_click", "sum"),
+            vle_mean=("sum_click", "mean"),
+            vle_std=("sum_click", lambda s: float(np.std(s, ddof=0))),
+        ).reset_index()
+    else:
+        vle_agg = pd.DataFrame(
+            columns=["id_student", "code_module", "code_presentation",
+                     "vle_total", "vle_mean", "vle_std"]
+        )
+
+    assess_w = filtered["student_assess"]
+    if not assess_w.empty:
+        assess_agg = assess_w.groupby(
+            ["id_student", "code_module", "code_presentation"]
+        ).agg(
+            assess_mean=("score", "mean"),
+            assess_max=("score", "max"),
+            assess_count=("score", "count"),
+        ).reset_index()
+    else:
+        assess_agg = pd.DataFrame(
+            columns=["id_student", "code_module", "code_presentation",
+                     "assess_mean", "assess_max", "assess_count"]
+        )
+
+    ei = ei.merge(vle_agg, how="left", on=["id_student", "code_module", "code_presentation"])
+    ei = ei.merge(assess_agg, how="left", on=["id_student", "code_module", "code_presentation"])
+
+    summary_cols = ["vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count"]
+    ei[summary_cols] = ei[summary_cols].fillna(0.0)
+    ei["imd_band"] = ei["imd_band"].fillna("Unknown")
+
+    ei = ei.reset_index(drop=True)
+    ei["node_idx"] = ei.index
+    return ei
+
+
 def build_edge_tables(
     filtered: Dict[str, pd.DataFrame],
     nodes: Dict[str, pd.DataFrame],
+    use_enrollment_nodes: bool = False,
+    window_days: int = 56,
 ) -> Dict[str, pd.DataFrame]:
     """
     Construct one DataFrame per edge type as (src_node_idx, dst_node_idx)
@@ -292,13 +440,61 @@ def build_edge_tables(
         ["id_student", "code_module", "code_presentation",
          "age_band", "num_of_prev_attempts", "studied_credits"]
     ].copy()
+
+    # Per-enrollment behavioral aggregates within prediction window
+    vle_w = filtered["student_vle"]
+    if not vle_w.empty:
+        vle_agg = vle_w.groupby(
+            ["id_student", "code_module", "code_presentation"]
+        ).agg(
+            vle_total=("sum_click", "sum"),
+            vle_mean=("sum_click", "mean"),
+            vle_std=("sum_click", lambda s: float(np.std(s, ddof=0))),
+        ).reset_index()
+    else:
+        vle_agg = pd.DataFrame(
+            columns=["id_student", "code_module", "code_presentation",
+                     "vle_total", "vle_mean", "vle_std"]
+        )
+
+    assess_w = filtered["student_assess"]
+    if not assess_w.empty:
+        assess_agg = assess_w.groupby(
+            ["id_student", "code_module", "code_presentation"]
+        ).agg(
+            assess_mean=("score", "mean"),
+            assess_max=("score", "max"),
+            assess_count=("score", "count"),
+        ).reset_index()
+    else:
+        assess_agg = pd.DataFrame(
+            columns=["id_student", "code_module", "code_presentation",
+                     "assess_mean", "assess_max", "assess_count"]
+        )
+
+    ei = ei.merge(vle_agg, how="left", on=["id_student", "code_module", "code_presentation"])
+    ei = ei.merge(assess_agg, how="left", on=["id_student", "code_module", "code_presentation"])
+
+    temporal_df = _compute_temporal_features(vle_w, window_days)
+    if not temporal_df.empty:
+        ei = ei.merge(temporal_df, how="left", on=["id_student", "code_module", "code_presentation"])
+    else:
+        for tc in ["weeks_active", "recency", "activity_trend", "max_inactive_gap"]:
+            ei[tc] = 0.0
+
+    summary_cols = ["vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count",
+                    "weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+    ei[summary_cols] = ei[summary_cols].fillna(0.0)
+
     ei["cp_key"] = ei["code_module"] + "_" + ei["code_presentation"]
     ei["src"] = ei["id_student"].map(stu_idx)
     ei["dst"] = ei["cp_key"].map(cp_idx)
     ei = ei.dropna(subset=["src", "dst"])
     ei[["src", "dst"]] = ei[["src", "dst"]].astype(int)
     edges["enrolled_in"] = ei[
-        ["src", "dst", "age_band", "num_of_prev_attempts", "studied_credits"]
+        ["src", "dst", "age_band", "num_of_prev_attempts", "studied_credits",
+         "vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count",
+         "weeks_active", "recency", "activity_trend", "max_inactive_gap"]
     ].copy()
 
     # ── contains_assess: course_presentation -> assessment ─────────────────
@@ -365,6 +561,48 @@ def build_edge_tables(
     edge_attr_cols = ["src", "dst", "total_clicks", "n_interactions",
                       "first_day", "last_day", "active_days"]
     edges["interacted_with"] = agg[edge_attr_cols].copy()
+
+    # ── Optional enrollment-node edges ─────────────────────────────────────
+    if use_enrollment_nodes and "enrollment" in nodes:
+        enr_df = nodes["enrollment"]
+        # Lookup mapping (id_student, code_module, code_presentation) -> enrollment node_idx
+        enr_idx_map = enr_df.set_index(["id_student", "code_module", "code_presentation"])["node_idx"]
+
+        # enrollment_to_student: enrollment -> student
+        e2s = enr_df[["node_idx", "id_student"]].copy()
+        e2s["src"] = e2s["node_idx"]
+        e2s["dst"] = e2s["id_student"].map(stu_idx)
+        e2s = e2s.dropna(subset=["src", "dst"])
+        e2s[["src", "dst"]] = e2s[["src", "dst"]].astype(int)
+        edges["enrollment_to_student"] = e2s[["src", "dst"]].copy()
+
+        # enrollment_to_course: enrollment -> course_presentation
+        e2c = enr_df[["node_idx", "code_module", "code_presentation"]].copy()
+        e2c["cp_key"] = e2c["code_module"] + "_" + e2c["code_presentation"]
+        e2c["src"] = e2c["node_idx"]
+        e2c["dst"] = e2c["cp_key"].map(cp_idx)
+        e2c = e2c.dropna(subset=["src", "dst"])
+        e2c[["src", "dst"]] = e2c[["src", "dst"]].astype(int)
+        edges["enrollment_to_course"] = e2c[["src", "dst"]].copy()
+
+        # enrollment_submits_assessment: enrollment -> assessment
+        sub_enr = filtered["student_assess"][
+            ["id_student", "id_assessment", "score", "code_module", "code_presentation"]
+        ].copy()
+        sub_enr["src"] = sub_enr.set_index(["id_student", "code_module", "code_presentation"]).index.map(enr_idx_map)
+        sub_enr["dst"] = sub_enr["id_assessment"].map(assess_idx)
+        sub_enr = sub_enr.dropna(subset=["src", "dst"])
+        sub_enr[["src", "dst"]] = sub_enr[["src", "dst"]].astype(int)
+        sub_enr["score"] = sub_enr["score"].fillna(0.0).astype(float)
+        edges["enrollment_submits_assessment"] = sub_enr[["src", "dst", "score"]].copy()
+
+        # enrollment_interacts_resource: enrollment -> vle_resource
+        agg_enr = agg.copy()
+        agg_enr["src"] = agg_enr.set_index(["id_student", "code_module", "code_presentation"]).index.map(enr_idx_map)
+        agg_enr["dst"] = agg_enr["id_site"].map(vle_idx)
+        agg_enr = agg_enr.dropna(subset=["src", "dst"])
+        agg_enr[["src", "dst"]] = agg_enr[["src", "dst"]].astype(int)
+        edges["enrollment_interacts_resource"] = agg_enr[edge_attr_cols].copy()
 
     return edges, max_date_submitted
 
@@ -438,6 +676,8 @@ def validate_graph_integrity(
         "assessment": "id_assessment",
         "vle_resource": "id_site",
     }
+    if "enrollment" in nodes:
+        id_cols["enrollment"] = ["id_student", "code_module", "code_presentation"]
     for ntype, key in id_cols.items():
         dup = nodes[ntype].duplicated(subset=key).sum()
         issues[f"dup_nodes_{ntype}"] = int(dup)
@@ -569,7 +809,7 @@ def materialize_graph_artifacts(
 # Convenience: run full pipeline for a single week
 # ---------------------------------------------------------------------------
 
-def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, object]:
+def run_pipeline(week: int = 8, data_dir=None, save_dir=None, use_enrollment_nodes: bool = False) -> Dict[str, object]:
     """
     Execute all pipeline stages for a given prediction week.
 
@@ -577,6 +817,7 @@ def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, objec
         week:     Prediction week (2, 4, 6, or 8).
         data_dir: Raw-data directory; defaults to config.DATA_DIR.
         save_dir: Output directory; defaults to config.GRAPH_ARTIFACTS_DIR.
+        use_enrollment_nodes: If True, build and include enrollment nodes and edges.
 
     Returns:
         Dict with keys: raw, filtered, nodes, edges, enrollments,
@@ -591,7 +832,10 @@ def run_pipeline(week: int = 8, data_dir=None, save_dir=None) -> Dict[str, objec
     raw = load_raw_tables(data_dir)
     filtered = apply_window_cutoff(raw, window_days)
     nodes, pre_imputation_nulls = build_node_tables(filtered)
-    edges, max_date_submitted = build_edge_tables(filtered, nodes)
+    if use_enrollment_nodes:
+        enr_node_df = build_enrollment_node_table(filtered, nodes, window_days=window_days)
+        nodes["enrollment"] = enr_node_df
+    edges, max_date_submitted = build_edge_tables(filtered, nodes, use_enrollment_nodes=use_enrollment_nodes, window_days=window_days)
     enrollments = build_enrollment_supervision(filtered)
     integrity = validate_graph_integrity(nodes, edges, enrollments)
     extra_metadata = {

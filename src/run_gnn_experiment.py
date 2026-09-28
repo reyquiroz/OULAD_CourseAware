@@ -63,7 +63,12 @@ def _append_or_create_csv(new_df: pd.DataFrame, path: str, dedup_keys: list) -> 
     combined.to_csv(path, index=False)
 
 
-def _build_model_and_optimizer(data, use_interacted_with_attrs: bool = False):
+def _build_model_and_optimizer(
+    data,
+    use_interacted_with_attrs: bool = False,
+    use_enrollment_nodes: bool = False,
+    use_edge_weights: bool = False,
+):
     """Construct a fresh EnrollmentGNN and Adam optimizer.
 
     Parameters
@@ -74,16 +79,20 @@ def _build_model_and_optimizer(data, use_interacted_with_attrs: bool = False):
         Passed through to ``EnrollmentGNN``.  When True, the model projects
         ``interacted_with`` edge attributes into the student embeddings.
         Default False (topology-only; preserves current behaviour).
+    use_enrollment_nodes : bool
+        If True, use enrollment node representations for predictions.
     """
     in_channels_dict = {ntype: data[ntype].x.shape[1] for ntype in data.node_types}
     ei_key = ("student", "enrolled_in", "course_presentation")
-    n_enrolled_in_attr = data[ei_key].edge_attr.shape[1]
+    n_enrolled_in_attr = data[ei_key].edge_attr.shape[1] if hasattr(data[ei_key], "edge_attr") and data[ei_key].edge_attr is not None else 0
 
     model = EnrollmentGNN(
         in_channels_dict=in_channels_dict,
         hidden_dim=HIDDEN_DIM,
         n_enrolled_in_attr=n_enrolled_in_attr,
         use_interacted_with_attrs=use_interacted_with_attrs,
+        use_enrollment_nodes=use_enrollment_nodes,
+        use_edge_weights=use_edge_weights,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     return model, optimizer
@@ -303,6 +312,10 @@ def run_random_split_experiment(
     seed: int = SEED,
     feature_mask=None,
     use_interacted_with_attrs: bool = False,
+    use_enrollment_summaries: bool = False,
+    use_enrollment_nodes: bool = False,
+    use_edge_weights: bool = False,
+    use_temporal_features: bool = False,
 ):
     """Train and evaluate EnrollmentGNN on a 70/10/20 random-student split.
 
@@ -329,7 +342,13 @@ def run_random_split_experiment(
     print(f"\n=== Random-split experiment  (week {week:02d}, {loss_weighting}, seed {seed}) ===")
 
     # Load raw graph (without normalization) so we can normalise with train mask
-    data = GraphDataLoader(week, feature_mask=feature_mask, skip_normalize=True).load()
+    data = GraphDataLoader(
+        week,
+        feature_mask=feature_mask,
+        skip_normalize=True,
+        use_enrollment_summaries=use_enrollment_summaries,
+        use_temporal_features=use_temporal_features,
+    ).load()
 
     # Build split masks for this seed using random_student_split()
     from oulad_data import random_student_split as _random_student_split
@@ -358,7 +377,12 @@ def run_random_split_experiment(
         pos_weight = False  # sentinel: triggers plain BCEWithLogitsLoss()
 
     # Model + optimizer — built from full data so inference channel dims are correct
-    model, optimizer = _build_model_and_optimizer(data, use_interacted_with_attrs=use_interacted_with_attrs)
+    model, optimizer = _build_model_and_optimizer(
+        data,
+        use_interacted_with_attrs=use_interacted_with_attrs,
+        use_enrollment_nodes=use_enrollment_nodes,
+        use_edge_weights=use_edge_weights,
+    )
 
     # Training — captures per-epoch curves
     best_val_auroc, best_epoch, train_losses, val_aurocs = run_training_loop(
@@ -419,6 +443,10 @@ def run_lcpo_experiment(
     lcpo_patience: int = 50,
     model_seeds: list = None,
     start_fold: int = 0,
+    use_enrollment_summaries: bool = False,
+    use_enrollment_nodes: bool = False,
+    use_edge_weights: bool = False,
+    use_temporal_features: bool = False,
 ):
     """Train and evaluate models per LCPO fold, running one model per seed.
 
@@ -500,7 +528,12 @@ def run_lcpo_experiment(
 
         # --- Load raw graph, normalise with train mask, then mask held-out edges ---
         # Load without normalization so stats can be computed from training rows only.
-        data = GraphDataLoader(week, skip_normalize=True).load()
+        data = GraphDataLoader(
+            week,
+            skip_normalize=True,
+            use_enrollment_summaries=use_enrollment_summaries,
+            use_temporal_features=use_temporal_features,
+        ).load()
         # Train-only normalization: stats computed from train mask only to prevent leakage
         # into test/val data. See _normalize_numeric_features() in gnn_model.py.
         data = _normalize_numeric_features(data, train_edge_mask=train_mask)
@@ -520,7 +553,11 @@ def run_lcpo_experiment(
         for mseed in model_seeds:
             torch.manual_seed(mseed)
             np.random.seed(mseed)
-            model, optimizer = _build_model_and_optimizer(data_masked)
+            model, optimizer = _build_model_and_optimizer(
+                data_masked,
+                use_enrollment_nodes=use_enrollment_nodes,
+                use_edge_weights=use_edge_weights,
+            )
 
             best_val_auroc, best_epoch, seed_train_losses, seed_val_aurocs = run_training_loop(
                 model, train_subgraph, data_masked, val_mask, optimizer,
@@ -541,6 +578,12 @@ def run_lcpo_experiment(
                 val_aurocs=np.array(seed_val_aurocs),
             )
 
+            # --- Threshold tuning on val set (F1-max, matching random-split path) ---
+            val_probs, val_labels = _infer_probs(model, data, val_mask)
+            best_threshold = 0.5
+            if val_labels.sum() > 0 and (1 - val_labels).sum() > 0:
+                best_threshold = select_threshold(val_probs, val_labels)
+
             # --- Evaluate on full (unmasked) graph ---
             probs, labels = _infer_probs(model, data, test_mask)
             if labels.sum() == 0 or (1 - labels).sum() == 0:
@@ -548,7 +591,7 @@ def run_lcpo_experiment(
                 fold_skipped = True
                 break
 
-            metrics = compute_metrics(probs, labels)
+            metrics = compute_metrics(probs, labels, threshold=best_threshold)
 
             record = {
                 "week": week,
@@ -668,6 +711,10 @@ if __name__ == "__main__":
     parser.add_argument("--model-seeds", nargs="+", type=int, default=[42, 123, 7, 17, 99],
                         help="Model initialisation seeds for LCPO (one run per seed per fold). "
                              "Default: 42 123 7 17 99")
+    parser.add_argument("--condition", type=str, default="full",
+                        help="GNN condition to run: 'full', 'with_enrollment_summaries', 'with_iw_attrs', 'enrollment_node', etc. Default: full")
+    parser.add_argument("--splits", nargs="+", choices=["random", "lcpo"], default=None,
+                        help="Which splits to run: random, lcpo, or both. Overrides --random-only/--lcpo-only.")
     args = parser.parse_args()
 
     # Resolve week list: --weeks wins over --week; fall back to DEFAULT_WEEK
@@ -701,27 +748,52 @@ if __name__ == "__main__":
             check_loss = run_overfit_check(data_for_check, train_mask_check)
             print(f"  Overfit check final loss: {check_loss:.4f}")
 
+        use_enroll_summaries = (args.condition == "with_enrollment_summaries")
+        use_iw = (args.condition == "with_iw_attrs")
+        use_enroll_nodes = (args.condition == "enrollment_node")
+        use_edge_w = (args.condition == "edge_aware_mp")
+        use_temporal = (args.condition in ("temporal_features", "temporal"))
+
+        # Determine which splits to run
+        if args.splits is not None:
+            run_random = "random" in args.splits
+            run_lcpo_flag = "lcpo" in args.splits
+        else:
+            run_random = not args.lcpo_only
+            run_lcpo_flag = not args.random_only
+
         # --- Random-student experiment: loop over (seed × weighted/unweighted) ---
-        if not args.lcpo_only:
+        if run_random:
             for seed_val in args.seeds:
                 for weighted_flag in (True, False):
                     row, metrics = run_random_split_experiment(
                         week=week, max_epochs=epochs, patience=pat,
                         weighted=weighted_flag, seed=seed_val,
+                        use_interacted_with_attrs=use_iw,
+                        use_enrollment_summaries=use_enroll_summaries,
+                        use_enrollment_nodes=use_enroll_nodes,
+                        use_edge_weights=use_edge_w,
+                        use_temporal_features=use_temporal,
                     )
+                    row["condition"] = args.condition
                     all_random_rows.append(row)
                     if random_metrics is None and weighted_flag:
                         random_metrics = metrics  # first seed, weighted — for _print_summary
 
-        if not args.random_only:
+        if run_lcpo_flag:
             lcpo_patience_val = 3 if args.quick else args.lcpo_patience
             week_lcpo_df = run_lcpo_experiment(
                 week=week, max_epochs=epochs, patience=pat,
                 max_folds=max_folds, lcpo_patience=lcpo_patience_val,
                 model_seeds=args.model_seeds,
                 start_fold=args.start_fold,
+                use_enrollment_summaries=use_enroll_summaries,
+                use_enrollment_nodes=use_enroll_nodes,
+                use_edge_weights=use_edge_w,
+                use_temporal_features=use_temporal,
             )
             if not week_lcpo_df.empty:
+                week_lcpo_df["condition"] = args.condition
                 all_lcpo_dfs.append(week_lcpo_df)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)

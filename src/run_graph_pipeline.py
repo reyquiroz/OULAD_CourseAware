@@ -51,6 +51,11 @@ def parse_args():
             "(default: results/graph/artifacts from config)."
         ),
     )
+    p.add_argument(
+        "--use-enrollment-nodes",
+        action="store_true",
+        help="Include explicit enrollment nodes and associated edges in the graph.",
+    )
     return p.parse_args()
 
 
@@ -136,6 +141,7 @@ def main():
         week=args.week,
         data_dir=args.data_dir,
         save_dir=save_dir,
+        use_enrollment_nodes=args.use_enrollment_nodes,
     )
 
     GRAPH_VALIDATION_DIR.mkdir(parents=True, exist_ok=True)

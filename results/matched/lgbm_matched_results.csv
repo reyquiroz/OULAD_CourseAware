@@ -1,0 +1,2 @@
+model,week,split_type,seed,fold,auroc,auprc,f1,precision,recall,balanced_acc,threshold
+LightGBM_matched,8,random,42,-1,0.8558080853942585,0.8895703090044951,0.7803655660377359,0.7887365911799762,0.7721703617269545,0.771137061537926,0.45

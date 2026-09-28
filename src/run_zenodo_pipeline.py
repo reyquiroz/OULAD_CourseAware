@@ -626,6 +626,7 @@ def run_zenodo_lcpo(
         compute_metrics,
         compute_pos_weight,
         run_training_loop,
+        select_threshold,
     )
 
     if model_seeds is None:
@@ -696,6 +697,12 @@ def run_zenodo_lcpo(
             with torch.no_grad():
                 logits = model(data)
             y = data[ei_key].y
+            val_probs = torch.sigmoid(logits[val_mask]).cpu().numpy()
+            val_labels = y[val_mask].cpu().numpy()
+            threshold = select_threshold(val_probs, val_labels) if (
+                val_labels.sum() > 0 and (1 - val_labels).sum() > 0
+            ) else 0.5
+
             test_probs = torch.sigmoid(logits[test_mask]).cpu().numpy()
             test_labels = y[test_mask].cpu().numpy()
 
@@ -703,7 +710,7 @@ def run_zenodo_lcpo(
                 print("SKIP (single class in test)")
                 break
 
-            metrics = compute_metrics(test_probs, test_labels)
+            metrics = compute_metrics(test_probs, test_labels, threshold=threshold)
             records.append({
                 "dataset": "zenodo",
                 "week": week,
@@ -715,6 +722,7 @@ def run_zenodo_lcpo(
                 "n_test": int(test_mask_np.sum()),
                 "best_val_auroc": best_val_auroc,
                 "best_epoch": best_epoch,
+                "best_threshold": threshold,
                 "pipeline_version": "v2_corrected",
                 **metrics,
             })
@@ -882,15 +890,22 @@ def main():
     p = argparse.ArgumentParser(description="Zenodo KU Leuven pipeline runner")
     p.add_argument("--week", type=int, default=WEEK,
                    help=f"Prediction week in days/7 (default: {WEEK})")
+    p.add_argument("--mode", choices=["all", "lgbm", "gnn"], default="all",
+                   help="Which experiment to run: 'lgbm' (LightGBM only), "
+                        "'gnn' (GNN only), 'all' (both). Default: all")
     p.add_argument("--quick", action="store_true",
                    help="Quick mode: 5 GNN epochs, 2 LCPO folds")
     p.add_argument("--skip-gnn", action="store_true",
-                   help="Skip GNN experiments; run LightGBM only")
+                   help="[deprecated] Skip GNN experiments; prefer --mode lgbm")
     p.add_argument("--seeds", nargs="+", type=int, default=[42, 123, 7, 17, 99],
                    help="Random seeds for random-split experiments")
     p.add_argument("--model-seeds", nargs="+", type=int, default=[42, 123, 7, 17, 99],
                    help="Model init seeds for LCPO GNN experiments")
     args = p.parse_args()
+
+    # --mode takes precedence; --skip-gnn is kept for backwards compatibility
+    run_gnn = args.mode in ("all", "gnn") and not args.skip_gnn
+    run_lgbm = args.mode in ("all", "lgbm")
 
     week = args.week
     max_epochs = 5 if args.quick else 200
@@ -899,10 +914,10 @@ def main():
     max_folds = 2 if args.quick else None
 
     print("=" * 60)
-    print(f"Zenodo pipeline — Week {week}")
+    print(f"Zenodo pipeline — Week {week}  mode={args.mode}")
     print("=" * 60)
 
-    # A. Build graph
+    # A. Build graph + artifacts (always needed as input for both paths)
     result = build_zenodo_graph(window_days=week * 7)
 
     # B. Materialize artifacts
@@ -913,8 +928,10 @@ def main():
 
     _ZENODO_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    random_rows = []
+
     # D. GNN experiments
-    if not args.skip_gnn:
+    if run_gnn:
         print(f"\n=== GNN Random-split (seeds={args.seeds}) ===")
         random_rows = run_zenodo_random_split(
             week=week, max_epochs=max_epochs, patience=patience, seeds=args.seeds
@@ -951,20 +968,16 @@ def main():
             summary_df.to_csv(summary_path, index=False)
             print(f"LCPO summary     → {summary_path}")
 
-    # E. LightGBM comparison — run in a separate subprocess to avoid OOM.
-    # The graph build (stage A) peaks at ~1.3 GB RAM; PyTorch + LightGBM + log
-    # data together exceed available memory in a single process on this machine.
-    # run_zenodo_lgbm_only.py imports NO PyTorch and is safe to run immediately after.
-    import subprocess
-    seeds_str = " ".join(str(s) for s in args.seeds)
-    script = Path(__file__).parent / "run_zenodo_lgbm_only.py"
-    print(f"\n=== LightGBM VLE-only (delegated to subprocess, seeds={args.seeds}) ===")
-    ret = subprocess.run(
-        [sys.executable, str(script), "--week", str(week), "--seeds"] + [str(s) for s in args.seeds],
-        check=False,
-    )
-    if ret.returncode != 0:
-        print(f"WARNING: LightGBM subprocess exited with code {ret.returncode}")
+    # E. LightGBM comparison
+    if run_lgbm:
+        print(f"\n=== LightGBM VLE-only (seeds={args.seeds}) ===")
+        lgbm_result = run_zenodo_lgbm(week=week, seeds=args.seeds)
+        all_lgbm_rows = lgbm_result["random"] + lgbm_result["lcpo"]
+        if all_lgbm_rows:
+            comp_df = pd.DataFrame(all_lgbm_rows)
+            comp_path = _ZENODO_RESULTS_DIR / "comparison_results.csv"
+            comp_df.to_csv(comp_path, index=False)
+            print(f"LightGBM results → {comp_path}")
 
     # Summary
     comp_path = _ZENODO_RESULTS_DIR / "comparison_results.csv"
@@ -978,7 +991,7 @@ def main():
         print(f"LightGBM random AUROC: {lgbm_rand['auroc'].mean():.4f} ± {lgbm_rand['auroc'].std():.4f}")
         if not lgbm_lcpo.empty:
             print(f"LightGBM LCPO   AUROC: {lgbm_lcpo['auroc'].mean():.4f} ± {lgbm_lcpo['auroc'].std():.4f}")
-    if not args.skip_gnn and "random_rows" in dir() and random_rows:
+    if run_gnn and random_rows:
         gnn_rand_aurocs = [r["auroc"] for r in random_rows]
         print(f"GNN random      AUROC: {np.mean(gnn_rand_aurocs):.4f} ± {np.std(gnn_rand_aurocs):.4f}")
     print("=" * 60)

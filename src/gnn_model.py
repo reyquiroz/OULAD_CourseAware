@@ -12,7 +12,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
-from torch_geometric.nn import HeteroConv, SAGEConv
+from torch_geometric.nn import HeteroConv, SAGEConv, MessagePassing
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -237,13 +237,19 @@ def build_train_subgraph(data: HeteroData, train_mask: torch.BoolTensor) -> Hete
         ("vle_resource", "rev_has_resource", "course_presentation"),
     ]
 
-    # ── Node features: copy all as-is ────────────────────────────────────────
+    # ── Node features: copy all as-is (filter enrollment nodes to train_mask) ──
     for ntype in data.node_types:
         store = data[ntype]
         if hasattr(store, "x") and store.x is not None:
-            sub[ntype].x = store.x.clone()
+            if ntype == "enrollment":
+                sub[ntype].x = store.x[train_mask].clone()
+            else:
+                sub[ntype].x = store.x.clone()
         if hasattr(store, "node_id") and store.node_id is not None:
-            sub[ntype].node_id = store.node_id.clone()
+            if ntype == "enrollment":
+                sub[ntype].node_id = store.node_id[train_mask].clone()
+            else:
+                sub[ntype].node_id = store.node_id.clone()
 
     # ── enrolled_in: filter to training rows ────────────────────────────────
     ei_store = data[ei_key]
@@ -295,6 +301,33 @@ def build_train_subgraph(data: HeteroData, train_mask: torch.BoolTensor) -> Hete
             sub[ekey].edge_index = store.edge_index.clone()
             if hasattr(store, "edge_attr") and store.edge_attr is not None:
                 sub[ekey].edge_attr = store.edge_attr.clone()
+
+    # ── Enrollment-node edges: filter by training enrollments ─────────────
+    # Mapping old global enrollment node_idx -> new sub-graph enrollment node_idx (0..n_train-1)
+    if "enrollment" in data.node_types and hasattr(data["enrollment"], "x"):
+        train_enr_indices = torch.nonzero(train_mask, as_tuple=True)[0]
+        # map global_idx -> sub_idx (-1 for non-train)
+        enr_global_to_sub = torch.full((len(train_mask),), -1, dtype=torch.long)
+        enr_global_to_sub[train_enr_indices] = torch.arange(len(train_enr_indices), dtype=torch.long)
+
+        for src_type, enr_edge, dst_type in [
+            ("enrollment", "enrollment_to_student", "student"),
+            ("enrollment", "enrollment_to_course", "course_presentation"),
+            ("enrollment", "enrollment_submits_assessment", "assessment"),
+            ("enrollment", "enrollment_interacts_resource", "vle_resource"),
+        ]:
+            ekey = (src_type, enr_edge, dst_type)
+            rev_ekey = (dst_type, f"rev_{enr_edge}", src_type)
+            if ekey in data.edge_types:
+                e_store = data[ekey]
+                # Filter where src (enrollment) is in train_mask
+                keep = train_mask[e_store.edge_index[0]]
+                sub_src = enr_global_to_sub[e_store.edge_index[0][keep]]
+                sub_dst = e_store.edge_index[1][keep]
+                sub[ekey].edge_index = torch.stack([sub_src, sub_dst], dim=0)
+                if hasattr(e_store, "edge_attr") and e_store.edge_attr is not None:
+                    sub[ekey].edge_attr = e_store.edge_attr[keep]
+                sub[rev_ekey].edge_index = torch.stack([sub_dst, sub_src], dim=0)
 
     return sub
 
@@ -392,11 +425,16 @@ class GraphDataLoader:
         artifact_dir: str = ARTIFACT_DIR,
         feature_mask: Optional[list] = None,
         skip_normalize: bool = False,
+        use_enrollment_summaries: bool = False,
+        use_temporal_features: bool = False,
+        **kwargs,
     ):
         self.week = week
         self.prefix = os.path.join(artifact_dir, f"week{week:02d}")
         self._feature_mask = feature_mask
         self._skip_normalize = skip_normalize
+        self.use_enrollment_summaries = use_enrollment_summaries
+        self.use_temporal_features = use_temporal_features
 
     def _path(self, suffix: str) -> str:
         return f"{self.prefix}_{suffix}.parquet"
@@ -417,9 +455,13 @@ class GraphDataLoader:
         # course_presentation
         cp = pd.read_parquet(self._path("nodes_course_presentation"))
         cp_cat = ["code_module", "code_presentation"]
-        cp_num = _numeric(cp["module_presentation_length"])
+        cp_nums = [_numeric(cp["module_presentation_length"])]
+        course_design_cols = ["n_assessments", "total_assessment_weight", "prop_cma", "prop_tma", "prop_exam", "n_vle_resources"]
+        for cdc in course_design_cols:
+            if cdc in cp.columns:
+                cp_nums.append(_numeric(cp[cdc]))
         data["course_presentation"].x = torch.cat(
-            [_onehot(cp[c]) for c in cp_cat] + [cp_num], dim=1
+            [_onehot(cp[c]) for c in cp_cat] + cp_nums, dim=1
         )
         data["course_presentation"].node_id = torch.arange(len(cp), dtype=torch.long)
 
@@ -459,9 +501,21 @@ class GraphDataLoader:
         # enrolled_in edge attributes: num_of_prev_attempts, studied_credits (numeric)
         # age_band (categorical → one-hot)
         ei_age = _onehot(ei["age_band"])
-        ei_num = torch.cat(
-            [_numeric(ei["num_of_prev_attempts"]), _numeric(ei["studied_credits"])], dim=1
-        )
+        num_cols = [_numeric(ei["num_of_prev_attempts"]), _numeric(ei["studied_credits"])]
+
+        # Optional: six enrollment-level behavioral summaries + temporal features
+        summary_cols = ["vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count"]
+        temporal_cols = ["weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+        if self.use_enrollment_summaries:
+            for col in summary_cols:
+                if col in ei.columns:
+                    num_cols.append(_numeric(ei[col]))
+        if getattr(self, "use_temporal_features", False):
+            for col in temporal_cols:
+                if col in ei.columns:
+                    num_cols.append(_numeric(ei[col]))
+
+        ei_num = torch.cat(num_cols, dim=1)
         ei_attr = torch.cat([ei_age, ei_num], dim=1)
 
         ei_key = ("student", "enrolled_in", "course_presentation")
@@ -530,6 +584,66 @@ class GraphDataLoader:
             np.stack([iw["dst"].values, iw["src"].values], axis=0), dtype=torch.long
         )
 
+        # Optional: enrollment nodes & edges if artifact exists
+        enr_node_path = self._path("nodes_enrollment")
+        if os.path.exists(enr_node_path):
+            enr_df = pd.read_parquet(enr_node_path)
+            cat_cols = ["gender", "region", "highest_education", "imd_band", "disability", "age_band"]
+            num_cols = ["num_of_prev_attempts", "studied_credits",
+                        "vle_total", "vle_mean", "vle_std",
+                        "assess_mean", "assess_max", "assess_count"]
+            data["enrollment"].x = torch.cat(
+                [_onehot(enr_df[c]) for c in cat_cols] + [_numeric(enr_df[c]) for c in num_cols if c in enr_df.columns],
+                dim=1,
+            )
+            data["enrollment"].node_id = torch.arange(len(enr_df), dtype=torch.long)
+
+            # Check for enrollment edges
+            for enr_edge, rev_enr_edge, src_type, dst_type in [
+                ("enrollment_to_student", "rev_enrollment_to_student", "enrollment", "student"),
+                ("enrollment_to_course", "rev_enrollment_to_course", "enrollment", "course_presentation"),
+            ]:
+                p = self._path(f"edges_{enr_edge}")
+                if os.path.exists(p):
+                    e_df = pd.read_parquet(p)
+                    ekey = (src_type, enr_edge, dst_type)
+                    data[ekey].edge_index = torch.tensor(
+                        np.stack([e_df["src"].values, e_df["dst"].values], axis=0), dtype=torch.long
+                    )
+                    rkey = (dst_type, rev_enr_edge, src_type)
+                    data[rkey].edge_index = torch.tensor(
+                        np.stack([e_df["dst"].values, e_df["src"].values], axis=0), dtype=torch.long
+                    )
+
+            p_sub = self._path("edges_enrollment_submits_assessment")
+            if os.path.exists(p_sub):
+                sub_df = pd.read_parquet(p_sub)
+                if len(sub_df) > 0:
+                    ekey = ("enrollment", "enrollment_submits_assessment", "assessment")
+                    data[ekey].edge_index = torch.tensor(
+                        np.stack([sub_df["src"].values, sub_df["dst"].values], axis=0), dtype=torch.long
+                    )
+                    data[ekey].edge_attr = _numeric(sub_df["score"])
+                    rkey = ("assessment", "rev_enrollment_submits_assessment", "enrollment")
+                    data[rkey].edge_index = torch.tensor(
+                        np.stack([sub_df["dst"].values, sub_df["src"].values], axis=0), dtype=torch.long
+                    )
+
+            p_iw = self._path("edges_enrollment_interacts_resource")
+            if os.path.exists(p_iw):
+                iw_df = pd.read_parquet(p_iw)
+                ekey = ("enrollment", "enrollment_interacts_resource", "vle_resource")
+                data[ekey].edge_index = torch.tensor(
+                    np.stack([iw_df["src"].values, iw_df["dst"].values], axis=0), dtype=torch.long
+                )
+                data[ekey].edge_attr = torch.cat(
+                    [_numeric(iw_df[c]) for c in iw_num_cols], dim=1
+                )
+                rkey = ("vle_resource", "rev_enrollment_interacts_resource", "enrollment")
+                data[rkey].edge_index = torch.tensor(
+                    np.stack([iw_df["dst"].values, iw_df["src"].values], axis=0), dtype=torch.long
+                )
+
         if not self._skip_normalize:
             data = _normalize_numeric_features(data, train_edge_mask=train_edge_mask)
         if self._feature_mask:
@@ -583,6 +697,44 @@ def load_split_masks(
 
 
 # ---------------------------------------------------------------------------
+# WeightedSAGEConv
+# ---------------------------------------------------------------------------
+
+class WeightedSAGEConv(MessagePassing):
+    """SAGEConv variant that supports scalar edge weights.
+
+    When edge_weight is provided, message = edge_weight * W_src(x_j).
+    When edge_weight is None, message = W_src(x_j).
+    Aggregation is mean by default, concatenated with W_dst(x_i) and projected.
+    """
+    def __init__(self, in_channels, out_channels, aggr: str = "mean", **kwargs):
+        super().__init__(aggr=aggr, **kwargs)
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        if isinstance(in_channels, tuple):
+            in_src, in_dst = in_channels
+        else:
+            in_src = in_dst = in_channels
+        self.lin_src = nn.Linear(in_src, out_channels, bias=False)
+        self.lin_dst = nn.Linear(in_dst, out_channels, bias=True)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        if isinstance(x, tuple):
+            x_src, x_dst = x
+        else:
+            x_src = x_dst = x
+        out = self.propagate(edge_index, x=x_src, edge_weight=edge_weight, size=(x_src.size(0), x_dst.size(0)))
+        out = out + self.lin_dst(x_dst)
+        return out
+
+    def message(self, x_j, edge_weight):
+        msg = self.lin_src(x_j)
+        if edge_weight is not None:
+            msg = msg * edge_weight.view(-1, 1)
+        return msg
+
+
+# ---------------------------------------------------------------------------
 # EnrollmentGNN
 # ---------------------------------------------------------------------------
 
@@ -627,10 +779,14 @@ class EnrollmentGNN(nn.Module):
         out_dim: int = 1,
         n_enrolled_in_attr: int = 0,
         use_interacted_with_attrs: bool = False,
+        use_enrollment_nodes: bool = False,
+        use_edge_weights: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.use_interacted_with_attrs = use_interacted_with_attrs
+        self.use_enrollment_nodes = use_enrollment_nodes
+        self.use_edge_weights = use_edge_weights
 
         # Build two HeteroConv layers.  SAGEConv expects (in_channels, out_channels).
         # Layer 1: heterogeneous in → hidden
@@ -654,15 +810,30 @@ class EnrollmentGNN(nn.Module):
             ("assessment", "rev_contains_assess", "course_presentation"),
             ("assessment", "rev_submitted", "student"),
         ]
+        # Enrollment-node edge types (optional)
+        enrollment_edge_types = [
+            ("enrollment", "enrollment_to_student", "student"),
+            ("student", "rev_enrollment_to_student", "enrollment"),
+            ("enrollment", "enrollment_to_course", "course_presentation"),
+            ("course_presentation", "rev_enrollment_to_course", "enrollment"),
+            ("enrollment", "enrollment_submits_assessment", "assessment"),
+            ("assessment", "rev_enrollment_submits_assessment", "enrollment"),
+            ("enrollment", "enrollment_interacts_resource", "vle_resource"),
+            ("vle_resource", "rev_enrollment_interacts_resource", "enrollment"),
+        ]
 
-        all_edge_types = base_edge_types + assess_edge_types
+        all_edge_types = base_edge_types + assess_edge_types + enrollment_edge_types
 
         for et in all_edge_types:
             src_type, _, dst_type = et
             in_src = in_channels_dict.get(src_type, hidden_dim)
             in_dst = in_channels_dict.get(dst_type, hidden_dim)
-            conv1_dict[et] = SAGEConv((in_src, in_dst), hidden_dim)
-            conv2_dict[et] = SAGEConv((hidden_dim, hidden_dim), hidden_dim)
+            if self.use_edge_weights:
+                conv1_dict[et] = WeightedSAGEConv((in_src, in_dst), hidden_dim)
+                conv2_dict[et] = WeightedSAGEConv((hidden_dim, hidden_dim), hidden_dim)
+            else:
+                conv1_dict[et] = SAGEConv((in_src, in_dst), hidden_dim)
+                conv2_dict[et] = SAGEConv((hidden_dim, hidden_dim), hidden_dim)
 
         self.conv1 = HeteroConv(conv1_dict, aggr="sum")
         self.conv2 = HeteroConv(conv2_dict, aggr="sum")
@@ -682,12 +853,17 @@ class EnrollmentGNN(nn.Module):
 
         # Edge-level prediction head: concat student + course_presentation + ei_attr
         # embeddings → hidden_dim * 3 input when ei_attr_proj is present, else * 2.
-        head_in = hidden_dim * 3 if n_enrolled_in_attr > 0 else hidden_dim * 2
+        # When use_enrollment_nodes is True, head_in is just hidden_dim (from enrollment node embedding).
+        if use_enrollment_nodes:
+            head_in = hidden_dim
+        else:
+            head_in = hidden_dim * 3 if n_enrolled_in_attr > 0 else hidden_dim * 2
         self.edge_head = nn.Sequential(
             nn.Linear(head_in, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, out_dim),
         )
+
 
     def _fill_missing(self, h_dict: dict, x_dict: dict, hidden_dim: int) -> dict:
         """Ensure every node type has a hidden representation (zeros if unreached)."""
@@ -696,6 +872,7 @@ class EnrollmentGNN(nn.Module):
             if ntype not in h_dict:
                 h_dict[ntype] = torch.zeros(x.size(0), hidden_dim, device=device)
         return h_dict
+
 
     def forward(self, data: HeteroData):
         hidden_dim = next(iter(self.conv1.convs.values())).out_channels
@@ -712,13 +889,44 @@ class EnrollmentGNN(nn.Module):
             if hasattr(data[et], "edge_index") and data[et].edge_index.numel() > 0
         }
 
-        ei_dict_1 = {et: ei for et, ei in edge_index_dict.items() if et in conv1_types}
-        h_dict = self.conv1(x_dict, ei_dict_1)
-        h_dict = {k: self.act(v) for k, v in h_dict.items()}
-        h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
+        # If edge weights are used, construct edge_weight_dict or pass kwargs
+        if self.use_edge_weights:
+            edge_weight_dict = {}
+            iw_key = ("student", "interacted_with", "vle_resource")
+            rev_iw_key = ("vle_resource", "rev_interacted_with", "student")
+            sub_key = ("student", "submitted", "assessment")
+            rev_sub_key = ("assessment", "rev_submitted", "student")
 
-        ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
-        h_dict = self.conv2(h_dict, ei_dict_2)
+            if iw_key in data.edge_types and hasattr(data[iw_key], "edge_attr") and data[iw_key].edge_attr is not None:
+                # total_clicks is col 0
+                w_iw = data[iw_key].edge_attr[:, 0]
+                edge_weight_dict[iw_key] = w_iw
+                if rev_iw_key in data.edge_types:
+                    edge_weight_dict[rev_iw_key] = w_iw
+
+            if sub_key in data.edge_types and hasattr(data[sub_key], "edge_attr") and data[sub_key].edge_attr is not None:
+                # score is col 0
+                w_sub = data[sub_key].edge_attr[:, 0]
+                edge_weight_dict[sub_key] = w_sub
+                if rev_sub_key in data.edge_types:
+                    edge_weight_dict[rev_sub_key] = w_sub
+
+            # HeteroConv expects edge_weight_dict with key `edge_weight_dict={edge_type: weight}`
+            ei_dict_1 = {et: ei for et, ei in edge_index_dict.items() if et in conv1_types}
+            h_dict = self.conv1(x_dict, ei_dict_1, edge_weight_dict=edge_weight_dict)
+            h_dict = {k: self.act(v) for k, v in h_dict.items()}
+            h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
+
+            ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
+            h_dict = self.conv2(h_dict, ei_dict_2, edge_weight_dict=edge_weight_dict)
+        else:
+            ei_dict_1 = {et: ei for et, ei in edge_index_dict.items() if et in conv1_types}
+            h_dict = self.conv1(x_dict, ei_dict_1)
+            h_dict = {k: self.act(v) for k, v in h_dict.items()}
+            h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
+
+            ei_dict_2 = {et: ei for et, ei in edge_index_dict.items() if et in conv2_types}
+            h_dict = self.conv2(h_dict, ei_dict_2)
         h_dict = {k: self.act(v) for k, v in h_dict.items()}
         h_dict = self._fill_missing(h_dict, x_dict, hidden_dim)
 
@@ -742,6 +950,12 @@ class EnrollmentGNN(nn.Module):
                 iw_agg.scatter_add_(0, iw_src.unsqueeze(1).expand_as(iw_proj), iw_proj)
                 h_dict["student"] = h_dict["student"] + iw_agg  # residual add
 
+        # Prediction head: enrollment-node representation vs edge-level prediction
+        if "enrollment" in h_dict and hasattr(self, "use_enrollment_nodes") and self.use_enrollment_nodes:
+            h_enr = h_dict["enrollment"]                 # (N_enrollments, hidden)
+            logits = self.edge_head(h_enr).squeeze(-1)   # (N_enrollments,)
+            return logits
+
         # Edge-level prediction on enrolled_in.
         # enrolled_in edge attributes are projected per-edge and concatenated with
         # the student / course_presentation node embeddings.  This gives each
@@ -760,6 +974,13 @@ class EnrollmentGNN(nn.Module):
 
         logits = self.edge_head(edge_repr).squeeze(-1)   # (E,)
         return logits
+
+
+class EnrollmentNodeGNN(EnrollmentGNN):
+    """Enrollment-node representation GNN. Operates directly on enrollment node embeddings."""
+    def __init__(self, *args, **kwargs):
+        kwargs["use_enrollment_nodes"] = True
+        super().__init__(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------

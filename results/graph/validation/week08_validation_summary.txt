@@ -2,7 +2,7 @@
   OULAD Graph Validation Summary — Week 8
 ====================================================================
 
-Construction runtime : 5.6 s  |  Peak memory : 1049.0 MB
+Construction runtime : 61.34 s  |  Peak memory : 1060.1 MB
 
 ── Node counts ──────────────────────────────────────────────────
   student                       28,785

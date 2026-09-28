@@ -17,6 +17,12 @@
       "code_module",
       "code_presentation",
       "module_presentation_length",
+      "n_assessments",
+      "total_assessment_weight",
+      "prop_cma",
+      "prop_tma",
+      "prop_exam",
+      "n_vle_resources",
       "node_idx"
     ],
     "assessment": [
@@ -36,6 +42,26 @@
       "week_from",
       "week_to",
       "node_idx"
+    ],
+    "enrollment": [
+      "id_student",
+      "code_module",
+      "code_presentation",
+      "gender",
+      "region",
+      "highest_education",
+      "imd_band",
+      "disability",
+      "age_band",
+      "num_of_prev_attempts",
+      "studied_credits",
+      "vle_total",
+      "vle_mean",
+      "vle_std",
+      "assess_mean",
+      "assess_max",
+      "assess_count",
+      "node_idx"
     ]
   },
   "edge_schema": {
@@ -44,7 +70,17 @@
       "dst",
       "age_band",
       "num_of_prev_attempts",
-      "studied_credits"
+      "studied_credits",
+      "vle_total",
+      "vle_mean",
+      "vle_std",
+      "assess_mean",
+      "assess_max",
+      "assess_count",
+      "weeks_active",
+      "recency",
+      "activity_trend",
+      "max_inactive_gap"
     ],
     "contains_assess": [
       "src",
@@ -68,6 +104,28 @@
       "last_day",
       "active_days"
     ],
+    "enrollment_to_student": [
+      "src",
+      "dst"
+    ],
+    "enrollment_to_course": [
+      "src",
+      "dst"
+    ],
+    "enrollment_submits_assessment": [
+      "src",
+      "dst",
+      "score"
+    ],
+    "enrollment_interacts_resource": [
+      "src",
+      "dst",
+      "total_clicks",
+      "n_interactions",
+      "first_day",
+      "last_day",
+      "active_days"
+    ],
     "_notes": {
       "interacted_with": "Aggregated from raw interaction records grouped by (id_student, id_site, code_module, code_presentation) before edge construction; the saved edge table stores student-node to resource-node pairs with aggregate features total_clicks / n_interactions / first_day / last_day / active_days.",
       "submitted": "Enrollment-scoped: matched on (id_student, code_module, code_presentation). score=0 where raw score is null."
@@ -77,14 +135,19 @@
     "student": 28785,
     "course_presentation": 22,
     "assessment": 40,
-    "vle_resource": 6364
+    "vle_resource": 6364,
+    "enrollment": 32593
   },
   "edge_counts": {
     "enrolled_in": 32593,
     "contains_assess": 40,
     "has_resource": 6364,
     "submitted": 44927,
-    "interacted_with": 1056217
+    "interacted_with": 1056217,
+    "enrollment_to_student": 32593,
+    "enrollment_to_course": 32593,
+    "enrollment_submits_assessment": 44927,
+    "enrollment_interacts_resource": 1056217
   },
   "enrollment_count": 32593,
   "label_at_risk_count": 17208,
@@ -95,15 +158,20 @@
     "nodes_course_presentation": "week08_nodes_course_presentation.parquet",
     "nodes_assessment": "week08_nodes_assessment.parquet",
     "nodes_vle_resource": "week08_nodes_vle_resource.parquet",
+    "nodes_enrollment": "week08_nodes_enrollment.parquet",
     "edges_enrolled_in": "week08_edges_enrolled_in.parquet",
     "edges_contains_assess": "week08_edges_contains_assess.parquet",
     "edges_has_resource": "week08_edges_has_resource.parquet",
     "edges_submitted": "week08_edges_submitted.parquet",
     "edges_interacted_with": "week08_edges_interacted_with.parquet",
+    "edges_enrollment_to_student": "week08_edges_enrollment_to_student.parquet",
+    "edges_enrollment_to_course": "week08_edges_enrollment_to_course.parquet",
+    "edges_enrollment_submits_assessment": "week08_edges_enrollment_submits_assessment.parquet",
+    "edges_enrollment_interacts_resource": "week08_edges_enrollment_interacts_resource.parquet",
     "enrollments": "week08_enrollments.parquet"
   },
-  "elapsed_seconds": 5.6,
-  "peak_memory_mb": 1049.0,
+  "elapsed_seconds": 61.34,
+  "peak_memory_mb": 1060.1,
   "max_date_submitted": 56,
   "pre_imputation_nulls": {
     "student": {
