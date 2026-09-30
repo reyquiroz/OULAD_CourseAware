@@ -9,9 +9,16 @@
 #SBATCH -t 04:00:00
 #SBATCH -A Lonestar6
 
+mkdir -p logs results/zenodo
+
 module load python3/3.11.2
 source $SCRATCH/OULAD/oulad_env/bin/activate
 cd $SCRATCH/OULAD
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
-python src/run_zenodo_pipeline.py --mode all --seeds 42 123 7 17 99
+# --seeds  = random-student split seeds
+# --model-seeds = model init seeds for GNN LCPO (must match --seeds count)
+python src/run_zenodo_pipeline.py \
+    --mode all \
+    --seeds 42 123 7 17 99 \
+    --model-seeds 42 123 7 17 99

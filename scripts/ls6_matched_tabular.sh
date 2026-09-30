@@ -9,6 +9,8 @@
 #SBATCH -t 02:00:00
 #SBATCH -A Lonestar6
 
+mkdir -p logs results/matched
+
 module load python3/3.11.2
 source $SCRATCH/OULAD/oulad_env/bin/activate
 cd $SCRATCH/OULAD
