@@ -5,15 +5,14 @@
 #SBATCH -p gpu-a100
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
 #SBATCH -t 04:00:00
 #SBATCH -A Lonestar6
 
 mkdir -p logs results/zenodo
 
 module load python3/3.11.2
-source $SCRATCH/OULAD/oulad_env/bin/activate
-cd $SCRATCH/OULAD
+source $WORK/OULAD/oulad_env/bin/activate
+cd $WORK/OULAD
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
 # --seeds  = random-student split seeds

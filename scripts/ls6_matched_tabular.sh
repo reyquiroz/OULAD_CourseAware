@@ -12,8 +12,8 @@
 mkdir -p logs results/matched
 
 module load python3/3.11.2
-source $SCRATCH/OULAD/oulad_env/bin/activate
-cd $SCRATCH/OULAD
+source $WORK/OULAD/oulad_env/bin/activate
+cd $WORK/OULAD
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
 python src/run_matched_comparison.py \

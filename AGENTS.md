@@ -10,7 +10,7 @@ shell commands, and other important information, read the current plan
 ## Stack
 
 Python 3.11.11 (pinned via `.python-version`, managed with pyenv). Virtual env lives in `oulad_env/` at project root.  
-ML stack: scikit-learn, XGBoost, LightGBM, PyTorch 2.13.0, PyTorch Geometric 2.8.0.post1.
+ML stack: scikit-learn, XGBoost, LightGBM, PyTorch 2.5.1, PyTorch Geometric 2.6.1.
 
 ## Setup
 
@@ -21,8 +21,9 @@ source oulad_env/bin/activate
 PyTorch / PyG must be installed via index-URL — plain `pip install -r requirements.txt` fails for those two packages:
 
 ```bash
-pip install torch==2.13.0 torch-geometric==2.8.0.post1 --index-url https://download.pytorch.org/whl/cpu
-# CUDA 12.1: use https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+pip install torch-geometric==2.6.1
+# CUDA 12.1 (LS6): use https://download.pytorch.org/whl/cu121 for the torch line
 ```
 
 ## Running Tests

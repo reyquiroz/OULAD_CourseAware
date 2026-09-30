@@ -11,8 +11,8 @@
 mkdir -p logs results/graph/artifacts
 
 module load python3/3.11.2
-source $SCRATCH/OULAD/oulad_env/bin/activate
-cd $SCRATCH/OULAD
+source $WORK/OULAD/oulad_env/bin/activate
+cd $WORK/OULAD
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
 
 for week in 2 4 6 8; do
