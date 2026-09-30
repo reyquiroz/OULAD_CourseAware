@@ -1,0 +1,7 @@
+fold_idx,held_out_module,held_out_presentation,n_train,n_test
+0,Accountancy,1819,3528,752
+1,Accountancy,1920,3575,705
+2,Accountancy,2021,3557,723
+3,Global economics,1819,3537,743
+4,Global economics,1920,3599,681
+5,Global economics,2021,3604,676
