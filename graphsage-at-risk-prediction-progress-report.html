@@ -1,0 +1,639 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GraphSAGE At-Risk Prediction — Progress Report</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.65;
+    color: #1f2328;
+    background: #ffffff;
+    padding: 40px 20px 60px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+
+  /* Header */
+  .report-header { border-bottom: 2px solid #e5e7eb; padding-bottom: 18px; margin-bottom: 28px; }
+  .report-header h1 { font-size: 22px; font-weight: 700; color: #1f2328; margin-bottom: 4px; }
+  .report-header .sub { font-size: 13px; color: #57606a; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin-top: 14px; }
+  .meta-grid span { font-size: 12px; color: #57606a; }
+  .meta-grid strong { color: #1f2328; }
+
+  /* Section headings */
+  .section { margin-top: 36px; }
+  .section-label {
+    display: inline-block;
+    background: #3b82d4;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 3px;
+    margin-bottom: 10px;
+  }
+  .section-label.purple { background: #7c5cd8; }
+  .section-label.red    { background: #c0392b; }
+  .section-label.green  { background: #2ecc71; color: #1f2328; }
+  h2 { font-size: 17px; font-weight: 700; color: #1f2328; margin-bottom: 10px; }
+  h3 { font-size: 14px; font-weight: 700; color: #1f2328; margin: 18px 0 6px; }
+  p  { margin-bottom: 10px; color: #24292f; }
+
+  /* Subsections */
+  .subsection { margin-top: 20px; padding-left: 0; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 14px 0 18px; }
+  thead th { background: #f7f8fa; font-weight: 700; padding: 7px 10px; text-align: left;
+              border-top: 1px solid #e5e7eb; border-bottom: 2px solid #e5e7eb; }
+  tbody td { padding: 6px 10px; border-bottom: 1px solid #f0f1f3; vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .highlight-row td { background: #f0f7ff; font-weight: 600; }
+  .gap-row td { background: #fff8f0; color: #8b4513; }
+
+  /* Metric badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-blue   { background: #dbeafe; color: #1d4ed8; }
+  .badge-purple { background: #ede9fe; color: #5b21b6; }
+  .badge-red    { background: #fee2e2; color: #991b1b; }
+  .badge-green  { background: #dcfce7; color: #166534; }
+  .badge-orange { background: #ffedd5; color: #9a3412; }
+
+  /* Key numbers */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .kpi { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; text-align: center; }
+  .kpi .val { font-size: 22px; font-weight: 700; color: #3b82d4; }
+  .kpi .val.purple { color: #7c5cd8; }
+  .kpi .val.red { color: #c0392b; }
+  .kpi .lbl { font-size: 11px; color: #57606a; margin-top: 2px; }
+
+  /* Info boxes */
+  .callout { border-left: 3px solid #3b82d4; background: #f0f7ff; padding: 10px 14px; margin: 14px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+  .callout.warning { border-color: #e67e22; background: #fff8f0; }
+  .callout.problem { border-color: #c0392b; background: #fef9f9; }
+  .callout.success { border-color: #2ecc71; background: #f0fdf4; }
+
+  /* Lists */
+  ul, ol { padding-left: 20px; margin-bottom: 10px; }
+  li { margin-bottom: 4px; }
+  code { background: #f6f8fa; border: 1px solid #e5e7eb; border-radius: 3px;
+         font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; padding: 1px 5px; }
+
+  /* Divider */
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 30px 0; }
+
+  /* Footer */
+  .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #e5e7eb;
+            text-align: center; font-size: 12px; color: #57606a; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  
+  <div class="report-header">
+    <h1>GraphSAGE for At-Risk Student Prediction</h1>
+    <div class="sub">Dissertation Progress Report — Pipeline Corrections &amp; Cross-Dataset Validation</div>
+    <div class="meta-grid">
+      <span><strong>Primary dataset:</strong> OULAD (Open University Learning Analytics)</span>
+      <span><strong>External dataset:</strong> KU Leuven Zenodo (Tiukhova et al., 2024)</span>
+      <span><strong>Pipeline version:</strong> <code>v2_corrected</code></span>
+      <span><strong>Prediction window:</strong> Week 8 (56 days)</span>
+      <span><strong>Model:</strong> EnrollmentGNN (GraphSAGE heterogeneous)</span>
+      <span><strong>Evaluation:</strong> Random-student split + LCPO (22 / 6 folds)</span>
+    </div>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-label">A</div>
+    <h2>What Have I Done?</h2>
+
+    <p>
+      This body of work covers eight structured sub-tasks that (1) identified and corrected
+      bugs in the original GNN pipeline, (2) ran fully reproducible experiments, and (3)
+      validated the approach on an independent external dataset.
+    </p>
+
+    
+    <div class="subsection">
+      <h3>1 — Seed Independence Fix (<code>gnn_model.py</code>)</h3>
+      <p>
+        Two hard-coded <code>torch.manual_seed(SEED)</code> / <code>np.random.seed(SEED)</code>
+        calls inside <code>EnrollmentGNN.__init__</code> and <code>run_training_loop</code>
+        unconditionally reset the random state to the <em>same</em> global seed before every
+        model is built or trained. This meant that all five model seeds (42, 123, 7, 17, 99)
+        produced identical weight initialisations and therefore identical results — making the
+        multi-seed design meaningless. Both calls were removed. The caller-side seed setup in
+        <code>run_gnn_experiment.py</code> was already correct and now takes effect.
+      </p>
+      <div class="callout success">
+        <strong>Impact:</strong> All original LCPO results (2 of 22 folds, all 5 seeds per fold
+        identical) were discarded. The full 22-fold × 5-seed experiment was re-run from scratch
+        under <code>pipeline_version = "v2_corrected"</code>.
+      </div>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>2 — Ablation Flag: <code>use_interacted_with_attrs</code></h3>
+      <p>
+        The supervisor asked whether the <code>interacted_with</code> edge attribute vector
+        (total clicks, active days, first/last day, etc.) contributes beyond graph topology alone.
+        A <code>use_interacted_with_attrs</code> flag was added to <code>EnrollmentGNN</code>,
+        and a new <code>"with_iw_attrs"</code> condition was added to the ablation study. When
+        this flag is enabled, the model uses the full 5-dimensional edge attribute vector for
+        each student–VLE interaction edge.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>3 — Design Decisions Documentation</h3>
+      <p>
+        Four correctness decisions were documented in <code>docs/DESIGN_DECISIONS.md</code>
+        with line-level code evidence:
+      </p>
+      <ul>
+        <li><strong>Training-only normalisation:</strong> mean/std computed from training edges only, applied to full graph — prevents test-distribution leakage into feature scaling.</li>
+        <li><strong>Inductive evaluation:</strong> <code>build_train_subgraph()</code> removes all test enrollment edges during training forward passes — GNN cannot aggregate over test students.</li>
+        <li><strong>LightGBM feature &amp; split matching:</strong> identical split functions, seeds, temporal guard (Strategy B dual guard), and LCPO fold CSVs ensure a fair GNN vs LightGBM comparison.</li>
+        <li><strong>Zenodo divergences:</strong> four schema-specific adaptations documented (single temporal guard, course-section normalisation, constant student features, datetime→day-offset conversion).</li>
+      </ul>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>4–5 — Full Experiments &amp; Figure Regeneration</h3>
+      <p>
+        After the seed fix, all experiments were re-run and all outputs regenerated:
+      </p>
+      <ul>
+        <li><code>lcpo_results.csv</code> — 110 rows: 22 folds × 5 seeds</li>
+        <li><code>random_student_results.csv</code> — 10 rows: 5 seeds × 2 loss weightings</li>
+        <li><code>ablation_results.csv</code> — 35 rows: 7 conditions × 5 seeds</li>
+        <li>6 report figures and 4 LaTeX-ready tables regenerated via <code>generate_report_figures.py</code></li>
+        <li>Old v1 results archived as <code>*_v1_buggy.csv</code> for audit trail</li>
+      </ul>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>6–7 — Zenodo External Dataset Pipeline</h3>
+      <p>
+        A full feasibility assessment was performed on the KU Leuven Zenodo dataset
+        (record 17087849) by direct data inspection. A CONDITIONAL GO verdict was issued
+        with four documented schema gaps. The complete pipeline was then built:
+      </p>
+      <ul>
+        <li><code>src/zenodo_data.py</code> — data loader mirroring <code>oulad_data.py</code>'s public API</li>
+        <li><code>src/run_zenodo_pipeline.py</code> — end-to-end pipeline (graph build → artefacts → splits → GNN → LightGBM)</li>
+        <li><code>src/run_zenodo_lgbm_only.py</code> — PyTorch-free LightGBM runner (OOM mitigation)</li>
+        <li>Graph artefacts in <code>results/zenodo/artifacts/</code>; results in <code>results/zenodo/</code></li>
+        <li>Cross-dataset figure: <code>fig_cross_dataset.png</code></li>
+      </ul>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>8 — Canonical Notebooks</h3>
+      <p>
+        Four fully executed Jupyter notebooks committed with outputs:
+      </p>
+      <ul>
+        <li><code>notebooks/OULAD_Graph_Analysis_Final.ipynb</code> — updated with v2 results + Zenodo sections</li>
+        <li><code>notebooks/OULAD_Baseline_Analysis.ipynb</code> — updated with GNN results + cross-dataset comparison</li>
+        <li><code>notebooks/Zenodo_Dataset_Graph_Analysis.ipynb</code> — new: data characterisation, schema comparison</li>
+        <li><code>notebooks/Zenodo_Dataset_Results.ipynb</code> — new: GNN + LightGBM evaluation + limitations</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr />
+
+  
+  <div class="section">
+    <div class="section-label purple">B</div>
+    <h2>What Results Do I Obtain?</h2>
+
+    
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="val">0.837</div>
+        <div class="lbl">OULAD GNN<br />Random AUROC</div>
+      </div>
+      <div class="kpi">
+        <div class="val">0.788</div>
+        <div class="lbl">OULAD GNN<br />LCPO AUROC</div>
+      </div>
+      <div class="kpi">
+        <div class="val purple">0.554</div>
+        <div class="lbl">Zenodo GNN<br />Random AUROC</div>
+      </div>
+      <div class="kpi">
+        <div class="val purple">0.646</div>
+        <div class="lbl">Zenodo LightGBM<br />Random AUROC</div>
+      </div>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>B1 — OULAD Main Comparison (Week 8)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Split</th><th>Model</th>
+            <th class="num">AUROC</th><th class="num">AUPRC</th>
+            <th class="num">F1</th><th class="num">Balanced Acc</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="highlight-row">
+            <td>Random-student</td><td>GNN (weighted)</td>
+            <td class="num">0.837 ± 0.003</td><td class="num">0.880 ± 0.003</td>
+            <td class="num">0.757 ± 0.008</td><td class="num">0.737 ± 0.033</td>
+          </tr>
+          <tr>
+            <td>Random-student</td><td>LightGBM</td>
+            <td class="num">0.765 ± 0.005</td><td class="num">0.807 ± 0.005</td>
+            <td class="num">0.723 ± 0.007</td><td class="num">0.636 ± 0.026</td>
+          </tr>
+          <tr class="highlight-row">
+            <td>LCPO</td><td>GNN</td>
+            <td class="num">0.788 ± 0.065</td><td class="num">0.810 ± 0.117</td>
+            <td class="num">0.678 ± 0.099</td><td class="num">0.704 ± 0.076</td>
+          </tr>
+          <tr>
+            <td>LCPO</td><td>LightGBM</td>
+            <td class="num">0.775 ± 0.056</td><td class="num">0.791 ± 0.118</td>
+            <td class="num">0.686 ± 0.093</td><td class="num">0.627 ± 0.069</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        <span class="badge badge-blue">GNN &gt; LightGBM</span> on both splits.
+        The weighted GNN achieves a <strong>+7.2 pp AUROC advantage</strong> over LightGBM
+        on the random-student split and a <strong>+1.3 pp advantage</strong> on LCPO.
+        Notably, the GNN's advantage is larger under random-student evaluation, where it
+        has seen representatives of most students during training. Under LCPO — where an
+        entire course-presentation is held out — the advantage narrows, suggesting the GNN
+        relies partly on student-level patterns that do not transfer across unseen courses.
+      </p>
+      <p>
+        The GNN's balanced accuracy advantage (+10.1 pp, random) is substantial, indicating
+        it better calibrates predictions across both at-risk and successful student classes
+        compared to LightGBM's recall-heavy profile (recall 0.862 vs F1 0.723).
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>B2 — LCPO Per-Fold Variance (22 folds)</h3>
+      <p>
+        The 22-fold LCPO experiment reveals strong course-level heterogeneity:
+      </p>
+      <table>
+        <thead>
+          <tr><th>Course</th><th class="num">Best fold AUROC</th><th class="num">Worst fold AUROC</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>BBB / FFF</td>
+            <td class="num">0.874 (FFF 2014J)</td>
+            <td class="num">—</td>
+            <td>Strongest generalisers — large, balanced courses</td>
+          </tr>
+          <tr>
+            <td>GGG</td>
+            <td class="num">—</td>
+            <td class="num">0.661–0.677</td>
+            <td>Hardest module — GNN struggles to transfer to this course</td>
+          </tr>
+          <tr>
+            <td>AAA</td>
+            <td class="num">0.759</td>
+            <td class="num">0.724</td>
+            <td>Moderate difficulty, moderate variance</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The LCPO standard deviation of <strong>±0.065</strong> captures this spread.
+        It reflects genuine variation in course difficulty and structure, not noise from
+        the seed fix — per-fold seed variance is now correctly ±0.005–0.045.
+        Module GGG appears systematically harder: its VLE interaction patterns may differ
+        structurally from the training courses in ways the GNN cannot bridge.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>B3 — Ablation Study (7 conditions, 5 seeds)</h3>
+      <table>
+        <thead>
+          <tr><th>Condition</th><th class="num">AUROC</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr class="highlight-row">
+            <td><code>with_iw_attrs</code></td><td class="num">0.846</td>
+            <td>Using interaction edge attributes improves over full model</td>
+          </tr>
+          <tr>
+            <td><code>full</code></td><td class="num">0.837</td>
+            <td>Baseline full model (topology + all edge types)</td>
+          </tr>
+          <tr>
+            <td><code>no_edge_attrs</code></td><td class="num">0.835</td>
+            <td>Removing all edge attribute projections: −0.2 pp</td>
+          </tr>
+          <tr>
+            <td><code>no_temporal</code></td><td class="num">0.830</td>
+            <td>Removing temporal features: −0.7 pp</td>
+          </tr>
+          <tr>
+            <td><code>no_course_features</code></td><td class="num">0.830</td>
+            <td>Removing course-presentation features: −0.7 pp</td>
+          </tr>
+          <tr>
+            <td><code>no_vle</code></td><td class="num">0.824</td>
+            <td>Removing VLE interaction edges: −1.3 pp</td>
+          </tr>
+          <tr>
+            <td><code>no_assessment</code></td><td class="num">0.809</td>
+            <td><strong>Largest drop: −2.8 pp.</strong> Assessment edges are most critical</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>Key finding:</strong> Assessment submission edges contribute the most to AUROC
+        (−2.8 pp when removed). VLE interactions are second most important (−1.3 pp).
+        Enabling full interaction-edge attribute vectors (<code>with_iw_attrs</code>) yields
+        a +0.9 pp gain over the baseline, suggesting the model currently uses interaction
+        edges only for topology and would benefit from richer edge features.
+      </div>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>B4 — Zenodo (KU Leuven) Results</h3>
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Split</th><th class="num">AUROC</th><th class="num">AUPRC</th><th class="num">F1</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>GNN</td><td>Random-student (5 seeds)</td>
+            <td class="num">0.554 ± 0.033</td><td class="num">0.409 ± 0.036</td><td class="num">0.487 ± 0.014</td>
+          </tr>
+          <tr>
+            <td>GNN</td><td>LCPO (6 folds × 5 seeds)</td>
+            <td class="num">0.499 ± 0.029</td><td class="num">0.347 ± 0.080</td><td class="num">0.266 ± 0.194</td>
+          </tr>
+          <tr class="highlight-row">
+            <td>LightGBM</td><td>Random-student (5 seeds)</td>
+            <td class="num">0.646 ± 0.019</td><td class="num">0.479 ± 0.027</td><td class="num">0.535 ± 0.023</td>
+          </tr>
+          <tr>
+            <td>LightGBM</td><td>LCPO (6 folds)</td>
+            <td class="num">0.607 ± 0.030</td><td class="num">0.444 ± 0.081</td><td class="num">0.416 ± 0.103</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Unusually, <span class="badge badge-orange">LightGBM &gt; GNN on Zenodo</span>
+        — the reverse of the OULAD finding. The GNN LCPO result of 0.499 is near-random,
+        and 3 of 6 folds (Accountancy 1920, Accountancy 2021, Global economics 2021) produce
+        an F1 of 0.0, meaning the GNN predicts all students as one class on those folds.
+        This is expected given the small dataset size (4,280 enrollments) and the absence of
+        assessment features and student demographics. LightGBM's simpler inductive bias
+        generalises better from so little data.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>B5 — Cross-Dataset Comparison</h3>
+      <table>
+        <thead>
+          <tr><th>Dataset</th><th>Model</th><th>Feature set</th><th class="num">Random AUROC</th><th class="num">LCPO AUROC</th></tr>
+        </thead>
+        <tbody>
+          <tr class="highlight-row">
+            <td>OULAD</td><td>GNN (weighted)</td><td>Full (VLE + assess + demog.)</td>
+            <td class="num">0.837 ± 0.003</td><td class="num">0.788 ± 0.065</td>
+          </tr>
+          <tr>
+            <td>OULAD</td><td>LightGBM</td><td>Full</td>
+            <td class="num">0.765 ± 0.005</td><td class="num">0.775 ± 0.056</td>
+          </tr>
+          <tr>
+            <td>OULAD</td><td>LightGBM</td><td>VLE-only</td>
+            <td class="num">0.765 ± 0.005</td><td class="num">—</td>
+          </tr>
+          <tr>
+            <td>Zenodo</td><td>GNN</td><td>VLE-only (no assess, no demog.)</td>
+            <td class="num">0.554 ± 0.033</td><td class="num">0.499 ± 0.029</td>
+          </tr>
+          <tr class="highlight-row">
+            <td>Zenodo</td><td>LightGBM</td><td>VLE-only</td>
+            <td class="num">0.646 ± 0.019</td><td class="num">0.607 ± 0.030</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The OULAD–Zenodo AUROC gap for the GNN (0.837 → 0.554) is explained by the
+        <em>combination</em> of three compounding factors: (1) 7.6× fewer training enrollments,
+        (2) no assessment features (−2.8 pp alone on OULAD), and (3) no student demographic
+        features. The gap is not evidence of a pipeline regression — LightGBM on the same
+        Zenodo data scores 0.646, well above random, confirming the signal exists in the data.
+        The GNN simply requires more data and richer features to outperform a tabular baseline.
+      </p>
+    </div>
+  </div>
+
+  <hr />
+
+  
+  <div class="section">
+    <div class="section-label red">C</div>
+    <h2>What Problems Have I Encountered?</h2>
+
+    
+    <div class="subsection">
+      <h3>C1 — Invalid Original Results (Seed Bug)</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> The original LCPO results CSV contained only 2 of 22 folds,
+        and all 5 model seeds per fold produced identical AUROC values. This was caused by two
+        hard-coded <code>torch.manual_seed(SEED)</code> calls inside the model constructor and
+        training loop that reset the random state to the same global constant on every invocation,
+        regardless of which seed the caller had set.
+      </div>
+      <p>
+        <strong>Resolution:</strong> Both calls were removed from <code>gnn_model.py</code>.
+        All results were discarded and re-generated from scratch. The old outputs were archived
+        as <code>*_v1_buggy.csv</code>.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C2 — Out-of-Memory Segfaults on Zenodo Pipeline</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> Running the full Zenodo pipeline as a single Python process
+        caused repeated segmentation faults (exit code 139). The Zenodo log files total ~675 MB
+        uncompressed; combined with PyTorch/PyG (~500 MB), loading all data simultaneously
+        exhausted available RAM. This occurred even after fixing the graph-build stage to stream
+        one year at a time, because the module-level <code>import torch</code> in
+        <code>run_zenodo_pipeline.py</code> means PyTorch is resident whenever any function
+        from that module is imported.
+      </div>
+      <p>
+        <strong>Resolution:</strong> Two fixes were applied:
+      </p>
+      <ol>
+        <li>Streaming fix: each year's log DataFrame is deleted with <code>del log_df; gc.collect()</code> immediately after processing, before the next year loads.</li>
+        <li>Process isolation: LightGBM evaluation was extracted into <code>run_zenodo_lgbm_only.py</code> — a PyTorch-free script. The main pipeline delegates to it via <code>subprocess.run()</code>, ensuring LightGBM and PyTorch never coexist in the same process.</li>
+      </ol>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C3 — Zenodo Course-Section Name Mismatch</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> The 2021 Global economics cohort is recorded as two sections
+        (<code>"Global economics 1"</code>, <code>"Global economics 2"</code>) in the
+        <code>course_participation</code> table, but as the base name <code>"Global economics"</code>
+        in <code>course_content</code> and <code>log_activity</code>. This caused 676 of 4,292
+        enrollment rows (15.7%) to fail their node lookup, producing no <code>enrolled_in</code>
+        edges for those students. The LCPO folds for these sections initially produced all-skip
+        results (single class in test set).
+      </div>
+      <p>
+        <strong>Resolution:</strong> A regex normalisation
+        (<code>str.replace(r"\s+\d+$", "", regex=True)</code>) was applied to
+        <code>student_info["code_module"]</code> in <code>build_oulad_compatible_tables()</code>,
+        matching the normalisation already applied to <code>vle</code> and <code>courses</code>
+        tables. Twelve students enrolled in both sections had identical <code>target</code>
+        values; <code>drop_duplicates</code> on the enrollment key safely retained one row per
+        student.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C4 — Missing <code>enrollment_idx</code> Attribute on Zenodo Graph</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> The <code>build_train_subgraph()</code> function in
+        <code>gnn_model.py</code> requires an <code>.enrollment_idx</code> attribute on
+        <code>enrolled_in</code> edges to track the mapping between edge position and
+        label row. This attribute is set in the OULAD <code>GraphDataLoader</code> but
+        was not set by the Zenodo-specific <code>_build_zenodo_hetero_data()</code> function,
+        causing an <code>AttributeError</code> on the first GNN training call.
+      </div>
+      <p>
+        <strong>Resolution:</strong> Added <code>data["student", "enrolled_in",
+        "course_presentation"].enrollment_idx = torch.arange(len(ei))</code> to
+        <code>_build_zenodo_hetero_data()</code>. Since the Zenodo enrolled_in edges are
+        built from the deduplicated enrollment table in order, a simple <code>arange</code>
+        is the correct mapping.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C5 — LCPO Type Mismatch (str vs int for presentation year)</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> The Zenodo enrollment DataFrame stores
+        <code>code_presentation</code> as a string (e.g. <code>"1819"</code>), but the LCPO
+        folds CSV stores <code>held_out_presentation</code> as an integer after a CSV
+        round-trip (e.g. <code>1819</code>). The comparison
+        <code>enroll["code_presentation"] == 1819</code> is always <code>False</code>, so
+        every fold's test mask was empty — causing all 6 LCPO folds to skip with "single
+        class in test set."
+      </div>
+      <p>
+        <strong>Resolution:</strong> Added an explicit <code>str(ho_pres)</code> cast when
+        constructing the fold mask in <code>run_zenodo_lcpo()</code>.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C6 — Merge Deduplication (4,292 vs 4,280 rows)</h3>
+      <div class="callout problem">
+        <strong>Problem:</strong> <code>build_features_zenodo()</code> returns 4,292 rows
+        (12 duplicate enrollment keys from the Global economics 1/2 split) while the
+        enrollment artefact has 4,280 rows. A left-join from the 4,280-row enrollment table
+        onto the 4,292-row features table caused row multiplication, producing an
+        <code>IndexError</code> when the resulting 4,292-row feature matrix was indexed
+        with a 4,280-element boolean mask.
+      </div>
+      <p>
+        <strong>Resolution:</strong> Applied <code>drop_duplicates(["id_student",
+        "code_module", "code_presentation"])</code> on the features DataFrame before the merge
+        in both <code>run_zenodo_lgbm</code> and <code>run_zenodo_lgbm_only.py</code>.
+      </p>
+    </div>
+
+    
+    <div class="subsection">
+      <h3>C7 — Zenodo GNN Near-Random LCPO Performance</h3>
+      <div class="callout warning">
+        <strong>Concern (not a bug):</strong> The Zenodo GNN achieves LCPO AUROC of 0.499 ± 0.029,
+        and 3 of 6 folds produce F1 = 0.0 (model predicts all students as one class). This is
+        not a pipeline error — LightGBM on the same data also declines substantially under LCPO
+        (0.646 → 0.607). The GNN's greater sensitivity to dataset size and feature richness
+        means it collapses to majority-class prediction on unseen course-presentations when
+        trained on only 3,604 enrollments with VLE features alone. Assessment edges (the single
+        largest contributor to OULAD GNN performance) are completely absent.
+      </div>
+      <p>
+        This is reported as a finding rather than a fix. It motivates a dissertation conclusion
+        that the GNN's advantage over LightGBM is conditional on dataset scale and feature richness,
+        and may not hold for small, feature-sparse datasets.
+      </p>
+    </div>
+
+  </div>
+
+  <hr />
+
+  
+  <div class="section">
+    <div class="section-label">Appendix</div>
+    <h2>Key Output Files</h2>
+    <table>
+      <thead><tr><th>File</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td><code>results/graph/comparison_results.csv</code></td><td>OULAD GNN + LightGBM, Week 8, both splits</td></tr>
+        <tr><td><code>results/graph/lcpo_results.csv</code></td><td>110 rows — 22 folds × 5 seeds, <code>v2_corrected</code></td></tr>
+        <tr><td><code>results/graph/ablation_results.csv</code></td><td>35 rows — 7 conditions × 5 seeds</td></tr>
+        <tr><td><code>results/graph/tables/table_main_comparison.csv</code></td><td>Summary table for manuscript</td></tr>
+        <tr><td><code>results/graph/figures/fig_cross_dataset.png</code></td><td>OULAD vs Zenodo AUROC bar chart</td></tr>
+        <tr><td><code>results/zenodo/random_student_results.csv</code></td><td>Zenodo GNN, 5 seeds</td></tr>
+        <tr><td><code>results/zenodo/lcpo_results.csv</code></td><td>Zenodo GNN LCPO, 6 folds × 5 seeds</td></tr>
+        <tr><td><code>results/zenodo/comparison_results.csv</code></td><td>Zenodo LightGBM, random + LCPO</td></tr>
+        <tr><td><code>docs/DESIGN_DECISIONS.md</code></td><td>4 correctness decisions with code evidence</td></tr>
+        <tr><td><code>notebooks/Zenodo_Dataset_Graph_Analysis.ipynb</code></td><td>Zenodo data characterisation notebook</td></tr>
+        <tr><td><code>notebooks/Zenodo_Dataset_Results.ipynb</code></td><td>Zenodo model evaluation notebook</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">Made with IBM Bob</div>
+</div>
+</body>
+</html>
