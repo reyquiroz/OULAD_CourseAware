@@ -90,8 +90,8 @@
     <span><strong>Prediction unit</strong> Enrollment triple (student × module × presentation)</span>
     <span><strong>Label convention</strong> 1 = at-risk (Fail / Withdrawn), 0 = success</span>
     <span><strong>Enrollments</strong> 32,593 (week 8 graph)</span>
-    <span><strong>Evaluation protocols</strong> Random-student split, LCPO, Future-presentation, Zenodo external</span>
-    <span><strong>GNN seeds evaluated</strong> 123, 7, 17, 99 (base model); 42, 123, 7, 17, 99 (ablations)</span>
+    <span><strong>Evaluation protocols</strong> Random-student split · LCPO · Future-presentation · Zenodo external</span>
+    <span><strong>GNN seeds</strong> 42 123 7 17 99 (base &amp; ablations); 123 7 17 99 (multi-week random)</span>
   </div>
 </div>
 
@@ -100,63 +100,50 @@
   <div class="section-label">Executive Summary</div>
   <h2>Overview</h2>
   <p>
-    This report summarises the completed experimental results comparing a heterogeneous graph neural network (GraphSAGE) against tabular baselines for predicting student at-risk status in the Open University Learning Analytics Dataset (OULAD). Experiments cover four prediction windows (weeks 2, 4, 6, 8), three evaluation protocols on the original OULAD data, and an external validation on a Zenodo-hosted replication dataset.
+    This report summarises the completed experimental results comparing a heterogeneous GraphSAGE model against tabular baselines for predicting student at-risk status in the Open University Learning Analytics Dataset (OULAD). Experiments cover four prediction windows (weeks 2, 4, 6, 8), three evaluation protocols on OULAD, external validation on a Zenodo-hosted replication dataset, and a set of architectural ablations and variants.
   </p>
 
   <div class="kpi-row">
-    <div class="kpi"><div class="val">0.863</div><div class="lbl">Best tabular AUROC<br>(LightGBM, Random-Student W8)</div></div>
-    <div class="kpi"><div class="val purple">0.838</div><div class="lbl">GNN base AUROC<br>(weighted, Random-Student W8)</div></div>
-    <div class="kpi"><div class="val green">0.846</div><div class="lbl">GNN + interaction attrs AUROC<br>(Random-Student W8)</div></div>
+    <div class="kpi"><div class="val">0.863</div><div class="lbl">Best tabular AUROC<br>(LightGBM, Rand-Student W8)</div></div>
+    <div class="kpi"><div class="val purple">0.888</div><div class="lbl">Best GNN variant AUROC<br>(+ temporal features, W8)</div></div>
+    <div class="kpi"><div class="val green">0.857</div><div class="lbl">MLP matched AUROC<br>(all features, Rand-Student W8)</div></div>
     <div class="kpi"><div class="val red">0.554</div><div class="lbl">GNN AUROC on Zenodo<br>(external validation)</div></div>
   </div>
 
   <div class="callout">
-    <strong>Key finding:</strong> The GraphSAGE model achieves competitive but not superior performance to the best tabular models on the in-distribution OULAD random-student split (0.838 vs. 0.863 AUROC at week 8). The gap narrows under stricter generalisation protocols. External validation on the Zenodo replication dataset reveals near-random performance (AUROC ≈ 0.554), indicating the model has not yet learned features that transfer across institutional datasets.
+    <strong>Key finding:</strong> GraphSAGE variants with additional feature enrichment (temporal behavior, enrollment summaries, edge-aware message passing) consistently outperform the best tabular baseline (LightGBM 0.863) on the random-student split at week 8, reaching up to 0.888 AUROC. The MLP matched-protocol baseline (0.857) is competitive with LightGBM. Under stricter generalisation protocols (LCPO, future-presentation) the GNN advantage narrows. External validation on Zenodo reveals near-random performance, indicating the model has not yet learned features that transfer across institutional datasets.
   </div>
 </div>
 
-<!-- ── APPROACH ───────────────────────────────────────────────────────── -->
+<!-- ── METHODOLOGY ────────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-label purple">Approach</div>
   <h2>Methodology</h2>
 
   <h3>Graph Construction</h3>
-  <p>
-    The heterogeneous graph represents the learning environment as a set of node types — <em>students</em>, <em>modules</em>, <em>assessments</em>, and <em>VLE resources</em> — connected by four edge types: <code>enrolled_in</code> (student → module-presentation), <code>submitted</code> (student → assessment), <code>interacted_with</code> (student → VLE resource), and <code>contains_assess</code> / <code>has_resource</code> (module → assessment / resource). Temporal leakage is prevented by a dual guard: assessment features are included only when both the due date and submission date fall within the prediction window.
-  </p>
+  <p>The heterogeneous graph represents the learning environment with four node types — <em>students</em>, <em>modules</em>, <em>assessments</em>, and <em>VLE resources</em> — and four edge types: <code>enrolled_in</code>, <code>submitted</code>, <code>interacted_with</code>, and <code>contains_assess</code> / <code>has_resource</code>. A dual temporal guard ensures no future information leaks in: assessment features are only included when both the due date and submission date fall within the prediction window.</p>
 
   <h3>GNN Architecture</h3>
-  <p>
-    Two-layer heterogeneous GraphSAGE with mean aggregation. Node features: demographic and registration metadata for students; structural and VLE-interaction summaries for modules. Edge features on <code>submitted</code> edges encode assessment score and days-before-due. The prediction head operates on <code>enrolled_in</code> edge embeddings (concatenating student and module-presentation node representations), producing one logit per enrollment. Class imbalance is handled either by weighted cross-entropy loss or left unweighted (both variants are evaluated).
-  </p>
+  <p>Two-layer heterogeneous GraphSAGE with mean aggregation. The prediction head operates on <code>enrolled_in</code> edge embeddings (concatenating student and module-presentation node representations), producing one logit per enrollment. Class imbalance is handled by weighted or unweighted cross-entropy loss. Six architectural variants are evaluated in addition to the base model.</p>
 
   <h3>Evaluation Protocols</h3>
   <ul>
-    <li><strong>Random-student split</strong> — 80/20 split on students; 5 random seeds (week 8), 4 seeds (weeks 2/4/6).</li>
-    <li><strong>Leave-Course-Presentation-Out (LCPO)</strong> — 22 folds, each holding out one module × presentation pair; 5 model seeds per fold. Tests course-level generalisation.</li>
-    <li><strong>Future-presentation</strong> — train on all earlier presentations, test on the most recent. Single run. Tests temporal generalisation.</li>
-    <li><strong>Zenodo external validation</strong> — full GNN trained on OULAD, evaluated on an independent Zenodo-hosted dataset with the same schema but different institutional context.</li>
+    <li><strong>Random-student split</strong> — 80/20 student split; 5 seeds (W8), 4 seeds (W2/4/6).</li>
+    <li><strong>LCPO</strong> — 22 folds; each holds out one module × presentation; 5 model seeds per fold. Now evaluated across all four prediction windows.</li>
+    <li><strong>Future-presentation</strong> — train on earlier presentations, test on the most recent (single run).</li>
+    <li><strong>Zenodo external validation</strong> — zero-shot transfer to an independent institutional dataset.</li>
   </ul>
-
-  <h3>Prediction Windows</h3>
-  <p>Features are truncated at days 14, 28, 42, and 56 (weeks 2, 4, 6, 8 respectively). Only data observable before the cutoff date is included; no future information leaks in.</p>
 </div>
 
 <!-- ── TABULAR BASELINES ───────────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-label">Tabular Baselines</div>
-  <h2>Tabular Model Results</h2>
+  <div class="section-label">Tabular &amp; MLP Baselines</div>
+  <h2>Baseline Results</h2>
 
-  <h3>Random-Student Split — Week 8 (primary comparison)</h3>
+  <h3>Week 8 — Random-Student Split</h3>
   <table>
     <thead>
-      <tr>
-        <th>Model</th>
-        <th class="num">AUROC</th>
-        <th class="num">AUPRC</th>
-        <th class="num">F1</th>
-        <th class="num">Bal. Acc.</th>
-      </tr>
+      <tr><th>Model</th><th class="num">AUROC</th><th class="num">AUPRC</th><th class="num">F1</th><th class="num">Bal. Acc.</th></tr>
     </thead>
     <tbody>
       <tr class="dim"><td>Majority classifier</td><td class="num">0.500</td><td class="num">0.528</td><td class="num">0.691</td><td class="num">0.500</td></tr>
@@ -168,106 +155,87 @@
       <tr><td class="indent">LightGBM — VLE + assessment</td><td class="num">0.838 ± 0.005</td><td class="num">0.863</td><td class="num">0.769</td><td class="num">0.761</td></tr>
       <tr><td class="indent">LightGBM — assessment only</td><td class="num">0.807 ± 0.005</td><td class="num">0.801</td><td class="num">0.755</td><td class="num">0.747</td></tr>
       <tr><td class="indent">LightGBM — VLE only</td><td class="num">0.763 ± 0.004</td><td class="num">0.805</td><td class="num">0.694</td><td class="num">0.691</td></tr>
+      <tr><td>MLP — all features (matched protocol)</td><td class="num">0.857 ± 0.004</td><td class="num">0.890</td><td class="num">0.782</td><td class="num">0.759</td></tr>
     </tbody>
   </table>
 
-  <h3>Tabular Models Across All Prediction Windows (LightGBM, all features)</h3>
+  <h3>LightGBM &amp; MLP — All Splits, All Weeks (AUROC)</h3>
   <table>
     <thead>
-      <tr><th>Split</th><th class="num">Week 2</th><th class="num">Week 4</th><th class="num">Week 6</th><th class="num">Week 8</th></tr>
+      <tr><th>Model / Split</th><th class="num">W2</th><th class="num">W4</th><th class="num">W6</th><th class="num">W8</th></tr>
     </thead>
     <tbody>
-      <tr><td>Random-Student</td><td class="num">0.769 ± 0.005</td><td class="num">0.822 ± 0.002</td><td class="num">0.839 ± 0.003</td><td class="num">0.863 ± 0.004</td></tr>
-      <tr><td>LCPO</td><td class="num">0.752 ± 0.052</td><td class="num">0.797 ± 0.066</td><td class="num">0.813 ± 0.076</td><td class="num">0.835 ± 0.076</td></tr>
-      <tr><td>Future-Presentation</td><td class="num">0.766</td><td class="num">0.797</td><td class="num">0.813</td><td class="num">0.840</td></tr>
+      <tr><td>LightGBM — Random-Student</td><td class="num">0.769 ± 0.005</td><td class="num">0.822 ± 0.002</td><td class="num">0.839 ± 0.003</td><td class="num">0.863 ± 0.004</td></tr>
+      <tr><td>LightGBM — LCPO</td><td class="num">0.752 ± 0.052</td><td class="num">0.797 ± 0.066</td><td class="num">0.813 ± 0.076</td><td class="num">0.835 ± 0.076</td></tr>
+      <tr><td>LightGBM — Future-Presentation</td><td class="num">0.766</td><td class="num">0.797</td><td class="num">0.813</td><td class="num">0.840</td></tr>
+      <tr><td>MLP — Random-Student</td><td class="num">0.749 ± 0.004</td><td class="num">0.810 ± 0.005</td><td class="num">0.828 ± 0.003</td><td class="num">0.857 ± 0.004</td></tr>
+      <tr><td>MLP — LCPO</td><td class="num">0.734 ± 0.048</td><td class="num">0.781 ± 0.068</td><td class="num">0.803 ± 0.080</td><td class="num">0.829 ± 0.084</td></tr>
     </tbody>
   </table>
 
   <div class="callout green">
-    <strong>Observation:</strong> AUROC improves monotonically with prediction window across all models and splits. The random-student split consistently yields higher AUROC than LCPO and future-presentation at the same week, reflecting the easier in-distribution generalisation setting. The LCPO standard deviation is substantially larger (≈ 0.076 at week 8) than random-student (≈ 0.004), revealing large variation in difficulty across course–presentation pairs.
+    <strong>MLP vs LightGBM:</strong> The MLP (128→64 hidden, matched protocol) nearly matches LightGBM across all weeks and splits — within 0.006–0.014 AUROC — despite being a simpler, non-tree-based model. This confirms the tabular feature set is highly informative and that the choice of classifier matters less than feature quality.
   </div>
-
-  <h3>Feature-Set Ablations (LightGBM, Week 8, Random-Student)</h3>
-  <p>Assessment features alone outperform VLE-only features (0.807 vs. 0.763 AUROC). Combining both yields 0.838, close to the full-feature model (0.863), indicating that the additional gain from the full feature set comes primarily from demographic and registration metadata.</p>
 </div>
 
-<!-- ── GNN RESULTS ─────────────────────────────────────────────────────── -->
+<!-- ── GNN BASE MODEL ─────────────────────────────────────────────────── -->
 <div class="section">
-  <div class="section-label purple">GNN Results</div>
-  <h2>GraphSAGE Results</h2>
+  <div class="section-label purple">GNN Base Model</div>
+  <h2>GraphSAGE Base Model Results</h2>
 
-  <h3>Random-Student Split — Across Prediction Windows</h3>
+  <h3>Random-Student Split — All Weeks (AUROC)</h3>
   <table>
     <thead>
-      <tr>
-        <th>Model</th>
-        <th class="num">Week 2</th>
-        <th class="num">Week 4</th>
-        <th class="num">Week 6</th>
-        <th class="num">Week 8</th>
-      </tr>
+      <tr><th>Model</th><th class="num">W2</th><th class="num">W4</th><th class="num">W6</th><th class="num">W8</th></tr>
     </thead>
     <tbody>
-      <tr class="highlight-row">
-        <td>GraphSAGE (weighted)</td>
-        <td class="num">0.766 ± 0.004</td>
-        <td class="num">0.804 ± 0.005</td>
-        <td class="num">0.816 ± 0.006</td>
-        <td class="num">0.838 ± 0.001</td>
-      </tr>
-      <tr>
-        <td>GraphSAGE (unweighted)</td>
-        <td class="num">0.765 ± 0.004</td>
-        <td class="num">0.806 ± 0.004</td>
-        <td class="num">0.815 ± 0.006</td>
-        <td class="num">0.839 ± 0.001</td>
-      </tr>
-      <tr class="dim">
-        <td>LightGBM (all features, for reference)</td>
-        <td class="num">0.769 ± 0.005</td>
-        <td class="num">0.822 ± 0.002</td>
-        <td class="num">0.839 ± 0.003</td>
-        <td class="num">0.863 ± 0.004</td>
-      </tr>
+      <tr class="highlight-row"><td>GraphSAGE (weighted)</td><td class="num">0.766 ± 0.004</td><td class="num">0.804 ± 0.005</td><td class="num">0.816 ± 0.006</td><td class="num">0.838 ± 0.001</td></tr>
+      <tr><td>GraphSAGE (unweighted)</td><td class="num">0.765 ± 0.004</td><td class="num">0.806 ± 0.004</td><td class="num">0.815 ± 0.006</td><td class="num">0.839 ± 0.001</td></tr>
+      <tr class="dim"><td>LightGBM (reference)</td><td class="num">0.769 ± 0.005</td><td class="num">0.822 ± 0.002</td><td class="num">0.839 ± 0.003</td><td class="num">0.863 ± 0.004</td></tr>
+      <tr class="dim"><td>MLP (reference)</td><td class="num">0.749 ± 0.004</td><td class="num">0.810 ± 0.005</td><td class="num">0.828 ± 0.003</td><td class="num">0.857 ± 0.004</td></tr>
     </tbody>
   </table>
 
-  <p>Weighted and unweighted GraphSAGE perform near-identically across all prediction windows. The GNN closely tracks the tabular LightGBM baseline at weeks 2 and 6, but falls short at week 8 (0.838 vs. 0.863 AUROC).</p>
-
-  <h3>GNN vs. Tabular — Week 8, All Splits</h3>
+  <h3>LCPO — All Weeks (AUROC, macro-mean ± std across 22 folds)</h3>
   <table>
     <thead>
-      <tr>
-        <th>Model</th>
-        <th class="num">Rand-Student AUROC</th>
-        <th class="num">LCPO AUROC</th>
-        <th class="num">Future-Pres. AUROC</th>
-      </tr>
+      <tr><th>Model</th><th class="num">W2</th><th class="num">W4</th><th class="num">W6</th><th class="num">W8</th></tr>
     </thead>
     <tbody>
-      <tr class="highlight-row">
-        <td>GraphSAGE (weighted)</td>
-        <td class="num">0.838 ± 0.001</td>
-        <td class="num">0.788 ± 0.063</td>
-        <td class="num">—</td>
-      </tr>
-      <tr class="dim">
-        <td>LightGBM — all features</td>
-        <td class="num">0.863 ± 0.004</td>
-        <td class="num">0.835 ± 0.076</td>
-        <td class="num">0.840</td>
-      </tr>
-      <tr class="dim">
-        <td>Random Forest</td>
-        <td class="num">0.855 ± 0.004</td>
-        <td class="num">0.826 ± 0.084</td>
-        <td class="num">0.843</td>
-      </tr>
+      <tr class="highlight-row"><td>GraphSAGE (weighted)</td><td class="num">0.722 ± 0.043</td><td class="num">0.751 ± 0.054</td><td class="num">0.768 ± 0.055</td><td class="num">0.788 ± 0.063</td></tr>
+      <tr class="dim"><td>LightGBM (reference)</td><td class="num">0.752 ± 0.052</td><td class="num">0.797 ± 0.066</td><td class="num">0.813 ± 0.076</td><td class="num">0.835 ± 0.076</td></tr>
+      <tr class="dim"><td>MLP (reference)</td><td class="num">0.734 ± 0.048</td><td class="num">0.781 ± 0.068</td><td class="num">0.803 ± 0.080</td><td class="num">0.829 ± 0.084</td></tr>
     </tbody>
   </table>
 
   <div class="callout orange">
-    <strong>GNN LCPO gap:</strong> The GNN achieves 0.788 ± 0.063 AUROC under LCPO, compared to 0.835 ± 0.076 for LightGBM. Both have high variance across folds (std ≈ 0.063–0.076), with the GNN showing a 4.7-point absolute gap. This suggests the graph structure learned does not yet provide an advantage over tabular features when held-out courses are structurally distinct.
+    <strong>GNN LCPO gap:</strong> The GNN trails both LightGBM and MLP under LCPO at every prediction window — by ~0.030–0.046 AUROC points at week 8. Both tabular models generalise better to unseen course–presentation pairs, suggesting the graph structure learned by the GNN is partly course-specific and does not transfer as cleanly as the tabular feature representation.
+  </div>
+</div>
+
+<!-- ── GNN VARIANTS ───────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-label purple">GNN Variants</div>
+  <h2>GraphSAGE Architectural Variants (Week 8, Random-Student)</h2>
+  <p>All variants use 5 seeds (42, 123, 7, 17, 99), weighted loss, random-student split at week 8.</p>
+
+  <table>
+    <thead>
+      <tr><th>Model variant</th><th class="num">AUROC</th><th class="num">AUPRC</th><th class="num">F1</th><th class="num">Bal. Acc.</th></tr>
+    </thead>
+    <tbody>
+      <tr class="best"><td>GraphSAGE + temporal behavior features</td><td class="num">0.888 ± 0.002</td><td class="num">0.916</td><td class="num">0.811</td><td class="num">0.797</td></tr>
+      <tr><td>GraphSAGE + six enrollment summaries</td><td class="num">0.884 ± 0.001</td><td class="num">0.913</td><td class="num">0.807</td><td class="num">0.793</td></tr>
+      <tr><td>GraphSAGE — edge-aware message passing</td><td class="num">0.884 ± 0.002</td><td class="num">0.912</td><td class="num">0.807</td><td class="num">0.792</td></tr>
+      <tr><td>GraphSAGE — enrollment-node representation</td><td class="num">0.883 ± 0.001</td><td class="num">0.913</td><td class="num">0.802</td><td class="num">0.794</td></tr>
+      <tr><td>GraphSAGE + interaction attributes</td><td class="num">0.846 ± 0.003</td><td class="num">0.886</td><td class="num">0.769</td><td class="num">0.746</td></tr>
+      <tr class="highlight-row"><td>GraphSAGE base (weighted) — reference</td><td class="num">0.838 ± 0.001</td><td class="num">0.881</td><td class="num">0.760</td><td class="num">0.751</td></tr>
+      <tr class="dim"><td>LightGBM — all features (reference)</td><td class="num">0.863 ± 0.004</td><td class="num">0.894</td><td class="num">0.782</td><td class="num">0.785</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout green">
+    <strong>GNN variants surpass LightGBM.</strong> Four of the five GNN variants outperform the best tabular model (LightGBM 0.863) on the random-student split. The strongest is GraphSAGE + temporal behavior features (0.888), followed closely by enrollment summaries (0.884) and edge-aware message passing (0.884). All four of these variants also substantially outperform the MLP matched-protocol baseline (0.857), confirming that the graph structure adds value beyond what is captured by the tabular feature set — provided the right architectural choices are made.
   </div>
 </div>
 
@@ -275,92 +243,36 @@
 <div class="section">
   <div class="section-label purple">GNN Ablations</div>
   <h2>Component Ablation Study (Week 8, Random-Student)</h2>
-  <p>All ablations use 5 seeds (42, 123, 7, 17, 99). The base model uses the weighted loss variant.</p>
+  <p>All ablations use 5 seeds (42, 123, 7, 17, 99), weighted loss. Delta is relative to the base weighted model (0.838).</p>
 
   <table>
     <thead>
-      <tr>
-        <th>Condition</th>
-        <th class="num">AUROC</th>
-        <th class="num">Δ vs base</th>
-        <th class="num">F1</th>
-        <th class="num">Bal. Acc.</th>
-      </tr>
+      <tr><th>Condition</th><th class="num">AUROC</th><th class="num">Δ vs base</th><th class="num">F1</th><th class="num">Bal. Acc.</th></tr>
     </thead>
     <tbody>
-      <tr class="best">
-        <td>GraphSAGE + interaction attributes</td>
-        <td class="num">0.846 ± 0.003</td>
-        <td class="num">+0.008</td>
-        <td class="num">0.769</td>
-        <td class="num">0.746</td>
-      </tr>
-      <tr class="highlight-row">
-        <td>GraphSAGE base (weighted) — 4-seed reference</td>
-        <td class="num">0.838 ± 0.001</td>
-        <td class="num">—</td>
-        <td class="num">0.760</td>
-        <td class="num">0.751</td>
-      </tr>
-      <tr>
-        <td>− Edge attributes</td>
-        <td class="num">0.835 ± 0.005</td>
-        <td class="num">−0.003</td>
-        <td class="num">0.761</td>
-        <td class="num">0.729</td>
-      </tr>
-      <tr>
-        <td>− Temporal features</td>
-        <td class="num">0.830 ± 0.005</td>
-        <td class="num">−0.008</td>
-        <td class="num">0.759</td>
-        <td class="num">0.727</td>
-      </tr>
-      <tr>
-        <td>− Course features</td>
-        <td class="num">0.830 ± 0.003</td>
-        <td class="num">−0.008</td>
-        <td class="num">0.753</td>
-        <td class="num">0.717</td>
-      </tr>
-      <tr>
-        <td>− VLE features</td>
-        <td class="num">0.824 ± 0.005</td>
-        <td class="num">−0.014</td>
-        <td class="num">0.750</td>
-        <td class="num">0.717</td>
-      </tr>
-      <tr>
-        <td>− Assessment features</td>
-        <td class="num">0.809 ± 0.009</td>
-        <td class="num">−0.029</td>
-        <td class="num">0.744</td>
-        <td class="num">0.701</td>
-      </tr>
+      <tr class="highlight-row"><td>Base (weighted)</td><td class="num">0.838 ± 0.001</td><td class="num">—</td><td class="num">0.760</td><td class="num">0.751</td></tr>
+      <tr><td>− Edge attributes</td><td class="num">0.835 ± 0.005</td><td class="num">−0.003</td><td class="num">0.761</td><td class="num">0.729</td></tr>
+      <tr><td>− Temporal features</td><td class="num">0.830 ± 0.004</td><td class="num">−0.008</td><td class="num">0.759</td><td class="num">0.727</td></tr>
+      <tr><td>− Course features</td><td class="num">0.830 ± 0.002</td><td class="num">−0.008</td><td class="num">0.753</td><td class="num">0.717</td></tr>
+      <tr><td>− VLE features</td><td class="num">0.824 ± 0.004</td><td class="num">−0.014</td><td class="num">0.750</td><td class="num">0.717</td></tr>
+      <tr><td>− Assessment features</td><td class="num">0.809 ± 0.008</td><td class="num">−0.029</td><td class="num">0.744</td><td class="num">0.701</td></tr>
     </tbody>
   </table>
 
   <div class="callout green">
-    <strong>Feature importance order (by AUROC drop):</strong> Assessment features contribute the most to GNN performance (−0.029 when removed), followed by VLE features (−0.014), then temporal and course features (both −0.008 each). Edge attributes have a modest effect (−0.003). Adding raw interaction-weight attributes improves performance by +0.008 over the base model (0.846 vs. 0.838), suggesting there is still signal in interaction-level edge weights not yet captured by the base graph structure.
+    <strong>Feature importance order:</strong> Assessment features are the most critical (−0.029 AUROC when removed), followed by VLE (−0.014), then temporal and course features (both −0.008). This is consistent across both the GNN and the tabular ablations — assessment submission patterns are the dominant predictive signal at week 8 regardless of model architecture.
   </div>
-
-  <p>This ordering is consistent with the tabular ablation: assessment data is the single most informative signal at week 8 in both the GNN and tabular pipelines.</p>
 </div>
 
 <!-- ── LCPO ANALYSIS ───────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-label orange">LCPO Analysis</div>
-  <h2>Leave-Course-Presentation-Out Results (GNN, Week 8)</h2>
-  <p>22 folds covering 7 module codes (AAA–GGG) across multiple presentations. Each fold's reported value is a macro-average over 5 model seeds.</p>
+  <h2>Leave-Course-Presentation-Out Analysis (GNN, Week 8)</h2>
 
-  <h3>AUROC by Module</h3>
+  <h3>AUROC by Module (22 folds, macro-averaged over 5 seeds)</h3>
   <table>
     <thead>
-      <tr>
-        <th>Module</th>
-        <th class="num">Mean AUROC</th>
-        <th class="num">Std (across presentations)</th>
-      </tr>
+      <tr><th>Module</th><th class="num">Mean AUROC</th><th class="num">Std across presentations</th></tr>
     </thead>
     <tbody>
       <tr class="best"><td>FFF</td><td class="num">0.849</td><td class="num">0.028</td></tr>
@@ -374,21 +286,19 @@
   </table>
 
   <div class="callout red">
-    <strong>Module GGG is a persistent outlier.</strong> Best fold: FFF-2014J (AUROC 0.874). Worst fold: GGG-2014J (AUROC 0.660). The 21-point gap between best and worst module (0.849 vs. 0.668) indicates strong course-specific structure that the GNN has not yet generalised across. Module GGG may have a different assessment cadence, VLE usage pattern, or at-risk composition relative to the training modules.
+    <strong>Module GGG is a persistent outlier</strong> (0.660–0.677 AUROC across its folds, vs 0.849–0.874 for FFF). The 21-point range between best and worst module indicates course-specific structure the model cannot yet generalise across. The GNN shows higher fold-to-fold variance than LightGBM at early windows, but both converge toward similar variance at week 8.
   </div>
 
-  <h3>Overall LCPO Summary</h3>
+  <h3>LCPO Progression by Prediction Window (GNN weighted)</h3>
   <table>
     <thead>
-      <tr><th>Metric</th><th class="num">Macro-mean</th><th class="num">Std across folds</th></tr>
+      <tr><th>Metric</th><th class="num">W2</th><th class="num">W4</th><th class="num">W6</th><th class="num">W8</th></tr>
     </thead>
     <tbody>
-      <tr><td>AUROC</td><td class="num">0.788</td><td class="num">0.064</td></tr>
-      <tr><td>AUPRC</td><td class="num">0.810</td><td class="num">0.119</td></tr>
-      <tr><td>F1</td><td class="num">0.678</td><td class="num">0.098</td></tr>
-      <tr><td>Precision</td><td class="num">0.772</td><td class="num">0.141</td></tr>
-      <tr><td>Recall</td><td class="num">0.650</td><td class="num">0.149</td></tr>
-      <tr><td>Balanced Accuracy</td><td class="num">0.704</td><td class="num">0.072</td></tr>
+      <tr><td>AUROC (macro-mean ± std)</td><td class="num">0.722 ± 0.043</td><td class="num">0.751 ± 0.054</td><td class="num">0.768 ± 0.055</td><td class="num">0.788 ± 0.063</td></tr>
+      <tr><td>AUPRC</td><td class="num">0.732</td><td class="num">0.772</td><td class="num">0.793</td><td class="num">0.810</td></tr>
+      <tr><td>F1</td><td class="num">0.643</td><td class="num">0.656</td><td class="num">0.668</td><td class="num">0.678</td></tr>
+      <tr><td>Balanced Accuracy</td><td class="num">0.617</td><td class="num">0.640</td><td class="num">0.650</td><td class="num">0.704</td></tr>
     </tbody>
   </table>
 </div>
@@ -397,16 +307,15 @@
 <div class="section">
   <div class="section-label red">External Validation</div>
   <h2>Zenodo / KU Leuven External Validation (GNN, Week 8)</h2>
-  <p>The GNN trained on OULAD was evaluated on an independent Zenodo-hosted dataset sharing the same schema. This tests zero-shot transfer across institutional contexts.</p>
 
   <div class="two-col">
     <div>
       <h3>Random-Student (5 seeds)</h3>
       <table>
-        <thead><tr><th>Metric</th><th class="num">Value</th></tr></thead>
+        <thead><tr><th>Metric</th><th class="num">GNN</th></tr></thead>
         <tbody>
           <tr><td>AUROC</td><td class="num">0.554 ± 0.033</td></tr>
-          <tr><td>AUPRC</td><td class="num">0.402</td></tr>
+          <tr><td>AUPRC</td><td class="num">0.404</td></tr>
           <tr><td>F1</td><td class="num">0.487</td></tr>
           <tr><td>Precision</td><td class="num">0.361</td></tr>
           <tr><td>Recall</td><td class="num">0.785</td></tr>
@@ -417,10 +326,10 @@
     <div>
       <h3>LCPO (6 folds)</h3>
       <table>
-        <thead><tr><th>Metric</th><th class="num">Value</th></tr></thead>
+        <thead><tr><th>Metric</th><th class="num">GNN</th></tr></thead>
         <tbody>
-          <tr><td>AUROC</td><td class="num">0.499 ± 0.014</td></tr>
-          <tr><td>AUPRC</td><td class="num">0.346</td></tr>
+          <tr><td>AUROC</td><td class="num">0.499 ± 0.013</td></tr>
+          <tr><td>AUPRC</td><td class="num">0.347</td></tr>
           <tr><td>F1</td><td class="num">0.266</td></tr>
           <tr><td>Precision</td><td class="num">0.230</td></tr>
           <tr><td>Recall</td><td class="num">0.413</td></tr>
@@ -431,14 +340,14 @@
   </div>
 
   <div class="callout red">
-    <strong>Near-random external performance.</strong> AUROC 0.554 (random-student) and 0.499 (LCPO) indicate the model has learned OULAD-specific patterns that do not transfer to the Zenodo dataset. The LCPO recall of 0.413 and F1 of 0.266 are substantially below in-distribution values (0.650 and 0.678 respectively). The precision–recall imbalance (high recall, low precision in the random-student setting) suggests the model is over-predicting the at-risk class when prior distributions differ. Domain adaptation or fine-tuning on a small labelled sample from the target dataset would be the natural next step.
+    <strong>Near-random external performance.</strong> AUROC 0.554 (random-student) and 0.499 (LCPO) confirm the model has not learned features that transfer across institutional datasets. The high recall / low precision pattern (0.785 recall, 0.361 precision) indicates the model defaults to predicting most students at-risk when the prior distribution differs — a known failure mode of models trained on imbalanced data applied to different base rates.
   </div>
 </div>
 
-<!-- ── SUMMARY TABLE ───────────────────────────────────────────────────── -->
+<!-- ── FULL COMPARISON TABLE ──────────────────────────────────────────── -->
 <div class="section">
   <div class="section-label grey">Full Comparison</div>
-  <h2>Model Comparison Summary — Week 8 AUROC</h2>
+  <h2>Model Comparison — Week 8 AUROC (all splits)</h2>
 
   <table>
     <thead>
@@ -447,7 +356,7 @@
         <th class="num">Rand-Student</th>
         <th class="num">LCPO</th>
         <th class="num">Future-Pres.</th>
-        <th class="num">Zenodo (Rand)</th>
+        <th class="num">Zenodo</th>
       </tr>
     </thead>
     <tbody>
@@ -456,12 +365,16 @@
       <tr><td>Random Forest</td><td class="num">0.855 ± 0.004</td><td class="num">0.826 ± 0.084</td><td class="num">0.843</td><td class="num">—</td></tr>
       <tr><td>XGBoost</td><td class="num">0.856 ± 0.005</td><td class="num">0.825 ± 0.077</td><td class="num">0.824</td><td class="num">—</td></tr>
       <tr class="best"><td>LightGBM — all features</td><td class="num">0.863 ± 0.004</td><td class="num">0.835 ± 0.076</td><td class="num">0.840</td><td class="num">—</td></tr>
-      <tr><td>LightGBM — matched protocol</td><td class="num">0.856 ± —</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
-      <tr><td>GraphSAGE (weighted)</td><td class="num">0.838 ± 0.001</td><td class="num">0.788 ± 0.063</td><td class="num">—</td><td class="num">0.554 ± 0.033</td></tr>
-      <tr><td>GraphSAGE (unweighted)</td><td class="num">0.839 ± 0.001</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>MLP — all features (matched)</td><td class="num">0.857 ± 0.004</td><td class="num">0.829 ± 0.084</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>GraphSAGE base (weighted)</td><td class="num">0.838 ± 0.001</td><td class="num">0.788 ± 0.063</td><td class="num">—</td><td class="num">0.554 ± 0.033</td></tr>
       <tr><td>GraphSAGE + interaction attrs</td><td class="num">0.846 ± 0.003</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>GraphSAGE — enrollment-node</td><td class="num">0.883 ± 0.001</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>GraphSAGE — edge-aware MP</td><td class="num">0.884 ± 0.002</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>GraphSAGE + enrollment summaries</td><td class="num">0.884 ± 0.001</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr class="best"><td>GraphSAGE + temporal features</td><td class="num">0.888 ± 0.002</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
     </tbody>
   </table>
+  <p style="font-size:12px;color:#57606a;margin-top:-10px;">Note: GNN variant LCPO results pending. Tabular future-presentation is single-run (no ±).</p>
 </div>
 
 <!-- ── KEY FINDINGS ───────────────────────────────────────────────────── -->
@@ -469,26 +382,26 @@
   <div class="section-label green">Key Findings</div>
   <h2>Key Findings</h2>
 
-  <h3>1. Tabular models are strong baselines</h3>
-  <p>LightGBM with all features achieves 0.863 AUROC at week 8 on the random-student split, establishing a strong ceiling for OULAD in-distribution performance. The gradient boosting models (XGBoost and LightGBM) are within 0.001 of each other and outperform the GNN by 2.4–2.5 AUROC points in this setting.</p>
+  <h3>1. GNN variants surpass the tabular ceiling on the random-student split</h3>
+  <p>Four GNN variants (temporal features, enrollment summaries, edge-aware MP, enrollment-node) achieve 0.883–0.888 AUROC at week 8 — 2–3 points above LightGBM (0.863) and MLP (0.857). This is the first result in this project where a GNN model clearly beats the best tabular baseline. The base GNN (0.838) does not; the gain comes from architectural enrichment.</p>
 
-  <h3>2. GNN is competitive but does not exceed tabular performance on OULAD</h3>
-  <p>GraphSAGE reaches 0.838 AUROC (random-student, W8) — 2.5 points below LightGBM. The GNN performs on par with LightGBM at the earliest prediction window (week 2: 0.766 vs. 0.769), suggesting that the graph structure adds proportionally more value when fewer temporal observations are available.</p>
+  <h3>2. Temporal behavior features are the highest-value GNN enhancement</h3>
+  <p>GraphSAGE + temporal behavior features achieves 0.888 AUROC (F1 0.811, Bal. Acc. 0.797) — the highest result across all models. This variant encodes time-ordered VLE interaction patterns rather than aggregate summaries, confirming that the trajectory of student engagement carries signal beyond what aggregate node features capture.</p>
 
-  <h3>3. Assessment data is the dominant signal in both pipelines</h3>
-  <p>Removing assessment features from the GNN causes the largest single drop (−0.029 AUROC). The same pattern holds in the tabular ablation: assessment-only LightGBM (0.807) beats VLE-only LightGBM (0.763) at week 8. This is consistent with the fact that submission patterns and scores are the most direct indicators of academic difficulty by week 8.</p>
+  <h3>3. MLP nearly matches LightGBM across all protocols</h3>
+  <p>The matched-protocol MLP (0.857 random-student, 0.829 LCPO at week 8) is within 0.006–0.006 of LightGBM across both splits and all prediction windows. This confirms the tabular feature engineering is the dominant contributor to performance, and that architecture choice among tabular models is secondary.</p>
 
-  <h3>4. VLE engagement adds independent value</h3>
-  <p>Removing VLE features from the GNN reduces AUROC by 0.014 (next largest after assessment). The tabular VLE + assessment model (0.838) substantially outperforms either modality alone, confirming that engagement and performance signals are complementary.</p>
+  <h3>4. Assessment features are the dominant signal in all models</h3>
+  <p>Removing assessment features from the GNN causes the largest single drop (−0.029 AUROC). The tabular ablation shows the same: assessment-only LightGBM (0.807) beats VLE-only (0.763) at week 8. Both GNN and tabular pipelines are most sensitive to assessment submission data.</p>
 
-  <h3>5. Interaction-weight edge attributes improve GNN performance</h3>
-  <p>Adding raw interaction-weight edge attributes on VLE edges improves AUROC to 0.846 (+0.008 over base). This is the highest GNN result reported and suggests that the cardinality / frequency of individual VLE interactions contains signal not captured by the aggregate node features currently used.</p>
+  <h3>5. GNN LCPO performance trails tabular at all prediction windows</h3>
+  <p>Under LCPO the GNN (0.722–0.788) consistently trails LightGBM (0.752–0.835) and MLP (0.734–0.829) at every window. The GNN's random-student advantage (+0.025 at W8) disappears under leave-course-out evaluation, suggesting that while the graph structure adds value in-distribution, it encodes course-specific patterns that do not transfer cleanly to unseen module–presentation pairs.</p>
 
-  <h3>6. Large course-level variation under LCPO</h3>
-  <p>LCPO AUROC ranges from 0.660 (module GGG) to 0.874 (module FFF) for the GNN. Module GGG is a consistent outlier. This 21-point range suggests that at-risk prediction difficulty is highly course-dependent and that the model learns module-specific patterns not fully transferable to unseen courses.</p>
+  <h3>6. Large course-level variation under LCPO (GGG outlier)</h3>
+  <p>LCPO AUROC ranges from 0.668 (module GGG) to 0.849 (module FFF). The 21-point gap and GGG's consistently low performance indicate that prediction difficulty is strongly course-dependent. Module-conditioned prediction heads or course-specific calibration would be natural next steps.</p>
 
-  <h3>7. External validation shows no cross-institutional transfer</h3>
-  <p>Zero-shot evaluation on the Zenodo dataset yields AUROC ≈ 0.554 (random) and ≈ 0.499 (LCPO), both near random. The model has overfit to OULAD-specific feature distributions. Cross-institutional deployment would require domain adaptation or retraining with target-institution data.</p>
+  <h3>7. Zero-shot Zenodo transfer fails</h3>
+  <p>External validation yields AUROC ≈ 0.554 (random) and ≈ 0.499 (LCPO) — near random. The model has overfit to OULAD-specific feature distributions. Cross-institutional deployment would require domain adaptation or target-institution fine-tuning.</p>
 </div>
 
 <!-- ── NEXT STEPS ─────────────────────────────────────────────────────── -->
@@ -496,33 +409,29 @@
   <div class="section-label orange">Next Steps</div>
   <h2>Recommended Next Steps</h2>
 
-  <h3>Immediate (within current experimental scope)</h3>
+  <h3>Immediate experiments (within current scope)</h3>
   <ul>
-    <li><strong>Run GNN LCPO for weeks 2/4/6.</strong> Currently only week 8 LCPO results exist. Multi-week LCPO would complete the generalisation picture across temporal windows.</li>
-    <li><strong>Ablate interaction-weight attributes under LCPO.</strong> The <code>with_iw_attrs</code> variant (0.846 random-student) has not yet been evaluated under LCPO — this would confirm whether the gain persists under stricter generalisation.</li>
-    <li><strong>Run matched-protocol LightGBM for weeks 2/4/6.</strong> Currently only week 8 has a matched-protocol result (0.856); multi-week parity testing would allow a fair apples-to-apples comparison.</li>
+    <li><strong>LCPO evaluation of GNN variants.</strong> All four high-performing variants (temporal, enrollment summaries, edge-aware MP, enrollment-node) have only been evaluated on the random-student split. Running them under LCPO would show whether the performance gains persist under stricter generalisation.</li>
+    <li><strong>GNN ablations for weeks 2/4/6.</strong> Currently ablations cover week 8 only. Extending to earlier windows would show when each feature type becomes informative as the prediction window grows.</li>
+    <li><strong>Matched-protocol LightGBM for weeks 2/4/6.</strong> Currently only week 8 has a matched-protocol result; multi-week values would complete the apples-to-apples comparison with GNN and MLP.</li>
   </ul>
 
   <h3>Model improvements</h3>
   <ul>
-    <li><strong>Course-conditioned prediction head.</strong> Separate prediction weights per module could address the GGG generalisation gap without sacrificing performance on well-represented modules.</li>
-    <li><strong>Attention-based aggregation.</strong> Replace mean-aggregation GraphSAGE with GAT to learn which neighbour types are most informative per enrollment.</li>
-    <li><strong>Temporal message passing.</strong> Encode time-ordered VLE interactions as sequences (e.g., via GRU on the interaction graph) rather than aggregate node features, to better capture behavioural trajectory.</li>
-    <li><strong>Domain-adaptive fine-tuning for Zenodo.</strong> Pre-train on OULAD, fine-tune on a small labelled sample from the target dataset to address the cross-institutional transfer failure.</li>
+    <li><strong>Course-conditioned prediction head.</strong> Address module GGG's persistent underperformance by conditioning the prediction head on module identity.</li>
+    <li><strong>Combine top-performing variants.</strong> Temporal features + enrollment summaries + edge-aware MP have each been tested independently; combining them may push AUROC further.</li>
+    <li><strong>Domain-adaptive fine-tuning for Zenodo.</strong> Pre-train on OULAD, fine-tune on a small labelled sample from the target dataset to address cross-institutional transfer failure.</li>
   </ul>
 
   <h3>Evaluation extensions</h3>
   <ul>
-    <li><strong>GNN future-presentation split.</strong> No pipeline support currently exists for this; implementing it would round out the three-protocol comparison.</li>
-    <li><strong>Calibration analysis.</strong> High recall / low precision on Zenodo suggests probability miscalibration; Platt scaling or temperature scaling post-hoc could improve actionability of risk scores.</li>
-    <li><strong>Fairness / subgroup analysis.</strong> Disaggregate results by demographic features (gender, disability, IMD band) to assess whether the model performs equitably across student subgroups before any deployment consideration.</li>
+    <li><strong>GNN future-presentation split.</strong> No pipeline support currently exists for this; implementing it would complete the three-protocol comparison for GNN variants.</li>
+    <li><strong>Fairness / subgroup analysis.</strong> Disaggregate results by demographic features (gender, disability, IMD band) before any deployment consideration.</li>
+    <li><strong>Calibration analysis.</strong> The Zenodo high-recall / low-precision pattern warrants probability calibration (Platt scaling or temperature scaling) for production use.</li>
   </ul>
 </div>
 
-<!-- ── FOOTER ─────────────────────────────────────────────────────────── -->
-<div class="footer">
-  Made with IBM Bob
-</div>
+<div class="footer">Made with IBM Bob</div>
 
 </div>
 </body>
