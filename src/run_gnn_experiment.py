@@ -650,7 +650,7 @@ def run_lcpo_experiment(
     summary_df = pd.DataFrame(summary_rows)
 
     summary_path = os.path.join(RESULTS_DIR, "lcpo_summary.csv")
-    summary_df.to_csv(summary_path, index=False)
+    _append_or_create_csv(summary_df, summary_path, dedup_keys=["week", "fold_idx"])
     print(f"  Fold summary (mean±std across seeds) → {summary_path}")
 
     return per_seed_df
@@ -803,7 +803,7 @@ if __name__ == "__main__":
         out_path = os.path.join(RESULTS_DIR, "random_student_results.csv")
         _append_or_create_csv(
             pd.DataFrame(all_random_rows), out_path,
-            dedup_keys=["week", "seed", "loss_weighting"],
+            dedup_keys=["week", "seed", "loss_weighting", "condition"],
         )
         print(f"\n  Saved {len(all_random_rows)} rows "
               f"({len(weeks_to_run)} week(s) × {len(args.seeds)} seed(s) × 2 weightings) → {out_path}")
