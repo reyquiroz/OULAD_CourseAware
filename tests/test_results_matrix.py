@@ -33,9 +33,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-RESULTS_DIR = PROJECT_ROOT / "results"
-MATCHED_DIR = RESULTS_DIR / "matched"
-GRAPH_DIR = RESULTS_DIR / "graph"
+from config import RESULTS_DIR, MATCHED_RESULTS_DIR, GRAPH_RESULTS_DIR, ZENODO_RESULTS_DIR
+
+MATCHED_DIR = MATCHED_RESULTS_DIR
+GRAPH_DIR = GRAPH_RESULTS_DIR
+ZENODO_DIR = ZENODO_RESULTS_DIR
 EXCEL_PATH = PROJECT_ROOT / "AUROC_Results_Matrix_by_Dr_Guo.xlsx"
 
 # ---------------------------------------------------------------------------
@@ -206,6 +208,12 @@ class TestWriterCorrectness:
             "model", "week", "split_type", "seed", "fold",
             "auroc", "auprc", "f1", "precision", "recall", "balanced_acc", "threshold",
         ]).to_csv(empty_csv, index=False)
+
+        wb = openpyxl.load_workbook(excel_copy)
+        ws = wb["Results"]
+        ws["E12"] = "—"
+        wb.save(excel_copy)
+        wb.close()
 
         try:
             urm.update_excel(
