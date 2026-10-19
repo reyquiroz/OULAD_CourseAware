@@ -1,0 +1,47 @@
+feature,importance
+vle_last_access,0.22824235
+assess_count,0.06465371
+assess_mean_score,0.0643045
+studied_credits,0.049808897
+highest_education_Lower Than A Level,0.026433313
+assess_max_score,0.025063109
+num_of_prev_attempts,0.024919914
+imd_band_0-10%,0.02115285
+gender_M,0.021074055
+assess_min_score,0.021037947
+assess_std_score,0.01955584
+disability_Y,0.016758915
+vle_activity_diversity,0.016564757
+imd_band_90-100%,0.016403174
+vle_num_days,0.0161899
+region_North Region,0.015702944
+region_Wales,0.0154831605
+vle_max_clicks,0.014692129
+imd_band_10-20,0.014680626
+vle_total_clicks,0.014239584
+region_Ireland,0.014233789
+imd_band_20-30%,0.013852471
+region_South Region,0.013848955
+region_South West Region,0.01347851
+age_band_35-55,0.013304304
+region_South East Region,0.013093467
+region_Scotland,0.013045834
+vle_std_clicks,0.012920609
+region_East Midlands Region,0.012766516
+region_North Western Region,0.012528933
+vle_mean_clicks,0.01228257
+vle_first_access,0.012166159
+highest_education_HE Qualification,0.012087821
+imd_band_30-40%,0.011685706
+imd_band_70-80%,0.011458222
+region_West Midlands Region,0.01134527
+imd_band_80-90%,0.011058677
+imd_band_60-70%,0.0107875485
+age_band_55_lt_=,0.010599025
+highest_education_Post Graduate Qualification,0.010442336
+region_London Region,0.010329023
+region_Yorkshire Region,0.010199038
+imd_band_50-60%,0.009932304
+imd_band_40-50%,0.009129784
+highest_education_No Formal quals,0.0064613987
+assess_missing_count,0.0
