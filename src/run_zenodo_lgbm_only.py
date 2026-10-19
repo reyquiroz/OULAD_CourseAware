@@ -36,7 +36,7 @@ from sklearn.metrics import (
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, ZENODO_RESULTS_DIR
 from zenodo_data import (
     build_features_zenodo,
     build_oulad_compatible_tables,
@@ -49,7 +49,7 @@ from zenodo_data import (
 
 # NOTE: intentionally no torch import — this script must stay PyTorch-free.
 
-_ZENODO_RESULTS_DIR = PROJECT_ROOT / "results" / "zenodo"
+_ZENODO_RESULTS_DIR = ZENODO_RESULTS_DIR
 _ARTIFACTS_DIR = _ZENODO_RESULTS_DIR / "artifacts"
 WEEK = 8
 

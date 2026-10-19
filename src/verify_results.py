@@ -27,8 +27,11 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 _SRC_DIR = Path(__file__).parent
-_PROJECT_ROOT = _SRC_DIR.parent
-_GRAPH_DIR = _PROJECT_ROOT / "results" / "graph"
+sys.path.insert(0, str(_SRC_DIR))
+
+from config import GRAPH_RESULTS_DIR
+
+_GRAPH_DIR = GRAPH_RESULTS_DIR
 _COMPARISON_PATH = _GRAPH_DIR / "comparison_results.csv"
 _TABLES_DIR = _GRAPH_DIR / "tables"
 

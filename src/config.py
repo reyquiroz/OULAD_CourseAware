@@ -11,7 +11,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 # Data directories
 DATA_DIR = PROJECT_ROOT / "data/raw"
-RESULTS_DIR = PROJECT_ROOT / "results"
+# Canonical results directory (results/results/ is the single authoritative results path)
+RESULTS_DIR = PROJECT_ROOT / "results" / "results"
+CANONICAL_RESULTS_DIR = RESULTS_DIR
+LEGACY_RESULTS_DIR = PROJECT_ROOT / "results"
 MODELS_DIR = PROJECT_ROOT / "models"
 DOCS_DIR = PROJECT_ROOT / "docs"
 
@@ -19,6 +22,11 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 BASELINE_RESULTS_DIR = RESULTS_DIR / "baseline"
 LCPO_RESULTS_DIR = RESULTS_DIR / "lcpo"
 CROSS_COURSE_RESULTS_DIR = RESULTS_DIR / "cross_course"
+MATCHED_RESULTS_DIR = RESULTS_DIR / "matched"
+ZENODO_RESULTS_DIR = RESULTS_DIR / "zenodo"
+FEATURE_IMPORTANCE_RESULTS_DIR = RESULTS_DIR / "feature_importance"
+COMPARISON_RESULTS_DIR = RESULTS_DIR / "comparison"
+THRESHOLD_RESULTS_DIR = RESULTS_DIR / "threshold_optimization"
 
 # Graph pipeline subdirectories
 GRAPH_RESULTS_DIR = RESULTS_DIR / "graph"
@@ -32,6 +40,11 @@ for directory in [
     BASELINE_RESULTS_DIR,
     LCPO_RESULTS_DIR,
     CROSS_COURSE_RESULTS_DIR,
+    MATCHED_RESULTS_DIR,
+    ZENODO_RESULTS_DIR,
+    FEATURE_IMPORTANCE_RESULTS_DIR,
+    COMPARISON_RESULTS_DIR,
+    THRESHOLD_RESULTS_DIR,
     GRAPH_RESULTS_DIR,
     GRAPH_ARTIFACTS_DIR,
     GRAPH_VALIDATION_DIR,
@@ -108,6 +121,18 @@ def get_results_path(filename, subdir="baseline"):
         return LCPO_RESULTS_DIR / filename
     elif subdir == "cross_course":
         return CROSS_COURSE_RESULTS_DIR / filename
+    elif subdir == "graph":
+        return GRAPH_RESULTS_DIR / filename
+    elif subdir == "matched":
+        return MATCHED_RESULTS_DIR / filename
+    elif subdir == "zenodo":
+        return ZENODO_RESULTS_DIR / filename
+    elif subdir == "comparison":
+        return COMPARISON_RESULTS_DIR / filename
+    elif subdir == "feature_importance":
+        return FEATURE_IMPORTANCE_RESULTS_DIR / filename
+    elif subdir == "threshold_optimization":
+        return THRESHOLD_RESULTS_DIR / filename
     else:
         return RESULTS_DIR / filename
 

@@ -8,6 +8,7 @@ load_supplementary_tables() Load vle, courses, studentRegistration tables.
 filter_window()           Filter VLE interactions and assessment submissions
                           to records available by a prediction cutoff (dual guard:
                           due_date <= window AND date_submitted <= window).
+exclude_early_unregistered() Drop enrollments already unregistered by the cutoff day.
 build_features()          Build one feature row per enrollment.
 sanitize_feature_names()  Sanitize column names for XGBoost / LightGBM.
 evaluate_metrics()        Compute standard binary-classification metrics.
@@ -102,6 +103,35 @@ def load_supplementary_tables(data_dir=None):
     student_registration = pd.read_csv(data_dir / "studentRegistration.csv")
 
     return vle, courses, student_registration
+
+
+def exclude_early_unregistered(enrollments_df, student_registration_df, cutoff_day):
+    """Drop enrollments whose ``date_unregistration`` is on or before *cutoff_day*.
+
+    Such enrollments have a known outcome at prediction time (the student has
+    already withdrawn), so evaluating on them inflates every model's AUROC.
+
+    The join is on the enrollment triple ``(id_student, code_module,
+    code_presentation)``.  Enrollments with a missing ``date_unregistration``
+    (never unregistered) or no registration record are kept.
+
+    Args:
+        enrollments_df:           DataFrame with the enrollment-triple columns.
+        student_registration_df:  studentRegistration table (needs the triple
+                                  columns and ``date_unregistration``).
+        cutoff_day:               Prediction-window cutoff in days
+                                  (look up via ``PREDICTION_WINDOWS``).
+
+    Returns:
+        ``(filtered_df, n_removed)`` — *filtered_df* keeps the original index
+        and columns of *enrollments_df*.
+    """
+    keys = ["id_student", "code_module", "code_presentation"]
+    reg = student_registration_df[keys + ["date_unregistration"]].drop_duplicates(keys)
+    merged = enrollments_df[keys].merge(reg, how="left", on=keys)
+    already_unregistered = (merged["date_unregistration"] <= cutoff_day).to_numpy()
+    filtered_df = enrollments_df.loc[~already_unregistered]
+    return filtered_df, int(already_unregistered.sum())
 
 
 def filter_window(vle, assess, assessments, window, submission_date_guard: bool = True):

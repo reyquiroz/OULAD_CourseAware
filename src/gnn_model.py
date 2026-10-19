@@ -23,9 +23,10 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import LabelEncoder
 import copy
+from config import GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR
 
-ARTIFACT_DIR = "results/graph/artifacts"
-EVAL_DIR = "results/graph/evaluation"
+ARTIFACT_DIR = str(GRAPH_ARTIFACTS_DIR)
+EVAL_DIR = str(GRAPH_EVALUATION_DIR)
 
 SEED = 42
 
@@ -58,8 +59,9 @@ def _normalize_numeric_features(
     """Standardize numeric columns in node and edge feature tensors in-place.
 
     One-hot columns (all values in {0, 1} with at most 2 unique values per
-    column) are left untouched.  For total_clicks and n_interactions a log1p
-    transform is applied before standardizing.
+    column) are left untouched; this includes the binary ``active_in_window``
+    enrolled_in indicator, which must never be z-scored.  For total_clicks and
+    n_interactions a log1p transform is applied before standardizing.
 
     Parameters
     ----------
@@ -427,6 +429,7 @@ class GraphDataLoader:
         skip_normalize: bool = False,
         use_enrollment_summaries: bool = False,
         use_temporal_features: bool = False,
+        use_enrollment_nodes: bool = False,
         **kwargs,
     ):
         self.week = week
@@ -435,6 +438,7 @@ class GraphDataLoader:
         self._skip_normalize = skip_normalize
         self.use_enrollment_summaries = use_enrollment_summaries
         self.use_temporal_features = use_temporal_features
+        self.use_enrollment_nodes = use_enrollment_nodes
 
     def _path(self, suffix: str) -> str:
         return f"{self.prefix}_{suffix}.parquet"
@@ -505,7 +509,9 @@ class GraphDataLoader:
 
         # Optional: six enrollment-level behavioral summaries + temporal features
         summary_cols = ["vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count"]
-        temporal_cols = ["weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+        # active_in_window is binary → skipped by _normalize_numeric_features (not z-scored)
+        temporal_cols = ["weeks_active", "recency", "activity_trend", "max_inactive_gap",
+                         "active_in_window"]
         if self.use_enrollment_summaries:
             for col in summary_cols:
                 if col in ei.columns:
@@ -584,9 +590,9 @@ class GraphDataLoader:
             np.stack([iw["dst"].values, iw["src"].values], axis=0), dtype=torch.long
         )
 
-        # Optional: enrollment nodes & edges if artifact exists
+        # Optional: enrollment nodes & edges if flag is set and artifact exists
         enr_node_path = self._path("nodes_enrollment")
-        if os.path.exists(enr_node_path):
+        if self.use_enrollment_nodes and os.path.exists(enr_node_path):
             enr_df = pd.read_parquet(enr_node_path)
             cat_cols = ["gender", "region", "highest_education", "imd_band", "disability", "age_band"]
             num_cols = ["num_of_prev_attempts", "studied_credits",

@@ -20,6 +20,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
+from config import GRAPH_RESULTS_DIR
 from gnn_model import (
     ARTIFACT_DIR,
     EVAL_DIR,
@@ -40,7 +41,7 @@ from gnn_model import (
 # Constants
 # ---------------------------------------------------------------------------
 
-RESULTS_DIR = "results/graph"
+RESULTS_DIR = str(GRAPH_RESULTS_DIR)
 DEFAULT_WEEK = 8
 MAX_EPOCHS = 200
 PATIENCE = 20
@@ -348,6 +349,7 @@ def run_random_split_experiment(
         skip_normalize=True,
         use_enrollment_summaries=use_enrollment_summaries,
         use_temporal_features=use_temporal_features,
+        use_enrollment_nodes=use_enrollment_nodes,
     ).load()
 
     # Build split masks for this seed using random_student_split()
@@ -447,6 +449,7 @@ def run_lcpo_experiment(
     use_enrollment_nodes: bool = False,
     use_edge_weights: bool = False,
     use_temporal_features: bool = False,
+    condition: str = "base",
 ):
     """Train and evaluate models per LCPO fold, running one model per seed.
 
@@ -463,6 +466,9 @@ def run_lcpo_experiment(
                     the fold result is the mean ± std across seeds.
     start_fold    : skip all folds with fold_idx < start_fold (resumption after
                     a partial run).  Default 0 (run all folds).
+    condition     : experiment condition label written into every row so that
+                    variants can coexist in the same CSV without overwriting each
+                    other's rows during deduplication.
     """
     if model_seeds is None:
         model_seeds = [42, 123, 7, 17, 99]
@@ -533,6 +539,7 @@ def run_lcpo_experiment(
             skip_normalize=True,
             use_enrollment_summaries=use_enrollment_summaries,
             use_temporal_features=use_temporal_features,
+            use_enrollment_nodes=use_enrollment_nodes,
         ).load()
         # Train-only normalization: stats computed from train mask only to prevent leakage
         # into test/val data. See _normalize_numeric_features() in gnn_model.py.
@@ -599,6 +606,8 @@ def run_lcpo_experiment(
                 "held_out_module": ho_module,
                 "held_out_presentation": ho_pres,
                 "model_seed": mseed,
+                "condition": condition,
+                "loss_weighting": "weighted",  # LCPO always uses class-weighted BCE
                 "n_train": int(train_mask_np.sum()),
                 "n_test": int(test_mask_np.sum()),
                 "best_val_auroc": best_val_auroc,
@@ -628,18 +637,23 @@ def run_lcpo_experiment(
 
     # --- lcpo_results.csv: one row per (fold, seed) ---
     per_fold_path = os.path.join(RESULTS_DIR, "lcpo_results.csv")
-    _append_or_create_csv(per_seed_df, per_fold_path, dedup_keys=["week", "fold_idx", "model_seed"])
+    _append_or_create_csv(per_seed_df, per_fold_path, dedup_keys=["week", "fold_idx", "model_seed", "condition"])
     print(f"  Per-fold-per-seed results → {per_fold_path}")
 
     # --- lcpo_summary.csv: one row per fold with mean ± std across seeds ---
+    # Group by loss_weighting so that weighted and unweighted settings produce
+    # separate summary rows and are never conflated in mean ± std computation.
     metric_cols = ["auroc", "auprc", "f1", "precision", "recall", "balanced_acc"]
     summary_rows = []
-    for (wk, fidx, ho_mod, ho_pres), fold_group in per_seed_df.groupby(
-        ["week", "fold_idx", "held_out_module", "held_out_presentation"], sort=False
+    for (wk, fidx, cond, lw, ho_mod, ho_pres), fold_group in per_seed_df.groupby(
+        ["week", "fold_idx", "condition", "loss_weighting",
+         "held_out_module", "held_out_presentation"], sort=False
     ):
         row: dict = {
             "week": wk,
             "fold_idx": fidx,
+            "condition": cond,
+            "loss_weighting": lw,
             "held_out_module": ho_mod,
             "held_out_presentation": ho_pres,
         }
@@ -650,7 +664,7 @@ def run_lcpo_experiment(
     summary_df = pd.DataFrame(summary_rows)
 
     summary_path = os.path.join(RESULTS_DIR, "lcpo_summary.csv")
-    _append_or_create_csv(summary_df, summary_path, dedup_keys=["week", "fold_idx"])
+    _append_or_create_csv(summary_df, summary_path, dedup_keys=["week", "fold_idx", "condition", "loss_weighting"])
     print(f"  Fold summary (mean±std across seeds) → {summary_path}")
 
     return per_seed_df
@@ -711,8 +725,16 @@ if __name__ == "__main__":
     parser.add_argument("--model-seeds", nargs="+", type=int, default=[42, 123, 7, 17, 99],
                         help="Model initialisation seeds for LCPO (one run per seed per fold). "
                              "Default: 42 123 7 17 99")
+    # NOTE: base GraphSAGE (condition='full') is missing seed 42 at all weeks in the
+    # current results (lcpo_results.csv only has seeds 123, 7, 17, 99 for that condition).
+    # Before computing final summary statistics, re-run with:
+    #   python src/run_gnn_experiment.py --lcpo-only --condition full --model-seeds 42
+    # to fill the gap. Do NOT change the default seeds list above.
     parser.add_argument("--condition", type=str, default="full",
                         help="GNN condition to run: 'full', 'with_enrollment_summaries', 'with_iw_attrs', 'enrollment_node', etc. Default: full")
+    parser.add_argument("--use-enrollment-nodes", action="store_true", default=False,
+                        help="Gate enrollment node loading in GraphDataLoader (default: False). "
+                             "When set, also implied by --condition enrollment_node.")
     parser.add_argument("--splits", nargs="+", choices=["random", "lcpo"], default=None,
                         help="Which splits to run: random, lcpo, or both. Overrides --random-only/--lcpo-only.")
     args = parser.parse_args()
@@ -750,7 +772,7 @@ if __name__ == "__main__":
 
         use_enroll_summaries = (args.condition == "with_enrollment_summaries")
         use_iw = (args.condition == "with_iw_attrs")
-        use_enroll_nodes = (args.condition == "enrollment_node")
+        use_enroll_nodes = args.use_enrollment_nodes or (args.condition == "enrollment_node")
         use_edge_w = (args.condition == "edge_aware_mp")
         use_temporal = (args.condition in ("temporal_features", "temporal"))
 
@@ -791,9 +813,9 @@ if __name__ == "__main__":
                 use_enrollment_nodes=use_enroll_nodes,
                 use_edge_weights=use_edge_w,
                 use_temporal_features=use_temporal,
+                condition=args.condition,
             )
             if not week_lcpo_df.empty:
-                week_lcpo_df["condition"] = args.condition
                 all_lcpo_dfs.append(week_lcpo_df)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -812,7 +834,7 @@ if __name__ == "__main__":
     if all_lcpo_dfs:
         lcpo_df = pd.concat(all_lcpo_dfs, ignore_index=True)
         lcpo_path = os.path.join(RESULTS_DIR, "lcpo_results.csv")
-        _append_or_create_csv(lcpo_df, lcpo_path, dedup_keys=["week", "fold_idx", "model_seed"])
+        _append_or_create_csv(lcpo_df, lcpo_path, dedup_keys=["week", "fold_idx", "model_seed", "condition"])
         print(f"  Saved {len(lcpo_df)} LCPO rows (all weeks) → {lcpo_path}")
 
     _print_summary(random_metrics, lcpo_df)

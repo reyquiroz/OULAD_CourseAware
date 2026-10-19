@@ -49,7 +49,12 @@ from config import (
     PREDICTION_WINDOWS,
     LABEL_MAPPING,
 )
-from oulad_data import load_oulad_data, load_supplementary_tables, filter_window
+from oulad_data import (
+    exclude_early_unregistered,
+    filter_window,
+    load_oulad_data,
+    load_supplementary_tables,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +97,9 @@ def apply_window_cutoff(
     VLE interactions: date <= window_days
     Assessment submissions: assessment due date <= window_days
         (availability is driven by due date AND submission date — dual guard, Strategy B)
+    Enrollments: those with date_unregistration <= window_days are removed from
+        student_info (and their VLE / assessment rows dropped) because their
+        outcome is already known at prediction time.
 
     Args:
         raw:         Dict produced by load_raw_tables().
@@ -109,6 +117,18 @@ def apply_window_cutoff(
         raw["assessments"],
         window_days,
     )
+    keys = ["id_student", "code_module", "code_presentation"]
+    student_info_f, n_removed = exclude_early_unregistered(
+        raw["student_info"], raw["student_registration"], window_days
+    )
+    print(
+        f"Window day {window_days}: removed {n_removed} already-unregistered enrollments"
+    )
+    kept = pd.MultiIndex.from_frame(student_info_f[keys].drop_duplicates())
+    vle_w = vle_w[pd.MultiIndex.from_frame(vle_w[keys]).isin(kept)]
+    assess_w = assess_w[pd.MultiIndex.from_frame(assess_w[keys]).isin(kept)]
+
+    filtered["student_info"] = student_info_f
     filtered["raw_assessments"] = raw["assessments"]
     filtered["student_vle"] = vle_w
     filtered["student_assess"] = assess_w
@@ -480,11 +500,15 @@ def build_edge_tables(
         ei = ei.merge(temporal_df, how="left", on=["id_student", "code_module", "code_presentation"])
     else:
         for tc in ["weeks_active", "recency", "activity_trend", "max_inactive_gap"]:
-            ei[tc] = 0.0
+            ei[tc] = np.nan
 
     summary_cols = ["vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count",
-                    "weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+                    "weeks_active", "activity_trend", "max_inactive_gap"]
     ei[summary_cols] = ei[summary_cols].fillna(0.0)
+    # recency = 0 means "active on the cutoff day"; inactive enrollments get
+    # the sentinel window_days + 1 (never active within the window).
+    ei["recency"] = ei["recency"].fillna(float(window_days + 1))
+    ei["active_in_window"] = ei["vle_total"] > 0
 
     ei["cp_key"] = ei["code_module"] + "_" + ei["code_presentation"]
     ei["src"] = ei["id_student"].map(stu_idx)
@@ -494,7 +518,8 @@ def build_edge_tables(
     edges["enrolled_in"] = ei[
         ["src", "dst", "age_band", "num_of_prev_attempts", "studied_credits",
          "vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count",
-         "weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+         "weeks_active", "recency", "activity_trend", "max_inactive_gap",
+         "active_in_window"]
     ].copy()
 
     # ── contains_assess: course_presentation -> assessment ─────────────────

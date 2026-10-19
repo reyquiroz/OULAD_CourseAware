@@ -29,8 +29,11 @@ import numpy as np
 # Paths (relative to project root — script is expected to be run from root)
 # ---------------------------------------------------------------------------
 _SRC_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _SRC_DIR.parent
-_GRAPH_DIR = _PROJECT_ROOT / "results" / "graph"
+sys.path.insert(0, str(_SRC_DIR))
+
+from config import GRAPH_RESULTS_DIR
+
+_GRAPH_DIR = GRAPH_RESULTS_DIR
 
 _LCPO_RESULTS_PATH = _GRAPH_DIR / "lcpo_results.csv"
 _COMPARISON_RESULTS_PATH = _GRAPH_DIR / "comparison_results.csv"

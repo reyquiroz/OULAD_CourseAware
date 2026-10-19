@@ -11,7 +11,11 @@ import pandas as pd
 import seaborn as sns
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-GRAPH_DIR = PROJECT_ROOT / "results" / "graph"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import GRAPH_RESULTS_DIR, ZENODO_RESULTS_DIR
+
+GRAPH_DIR = GRAPH_RESULTS_DIR
 FIGURES_DIR = GRAPH_DIR / "figures"
 TABLES_DIR = GRAPH_DIR / "tables"
 
@@ -524,7 +528,6 @@ def make_cross_dataset_figure(combined_df: pd.DataFrame) -> None:
 
 
 # Zenodo results paths (populated by run_zenodo_pipeline.py / run_zenodo_lgbm_only.py)
-ZENODO_RESULTS_DIR = PROJECT_ROOT / "results" / "zenodo"
 ZENODO_GNN_RANDOM_PATH = ZENODO_RESULTS_DIR / "random_student_results.csv"
 ZENODO_LGBM_PATH = ZENODO_RESULTS_DIR / "comparison_results.csv"
 

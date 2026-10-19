@@ -14,8 +14,12 @@ from pathlib import Path
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EVAL_DIR = PROJECT_ROOT / "results" / "graph" / "evaluation"
-ARTIFACTS_DIR = PROJECT_ROOT / "results" / "graph" / "artifacts"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import GRAPH_EVALUATION_DIR, GRAPH_ARTIFACTS_DIR
+
+EVAL_DIR = GRAPH_EVALUATION_DIR
+ARTIFACTS_DIR = GRAPH_ARTIFACTS_DIR
 
 WEEKS = [2, 4, 6, 8]
 FUTURE_TRAIN_PRESENTATIONS = {"2013B", "2013J", "2014B"}

@@ -34,15 +34,14 @@ from sklearn.metrics import (
 # ---------------------------------------------------------------------------
 
 _SRC_DIR = Path(__file__).parent
-_PROJECT_ROOT = _SRC_DIR.parent
-_GRAPH_DIR = _PROJECT_ROOT / "results" / "graph"
-_SPLITS_DIR = _GRAPH_DIR / "evaluation"
-_ARTIFACTS_DIR = _GRAPH_DIR / "artifacts"
-
-# Add src/ to the path so local modules can be imported
 sys.path.insert(0, str(_SRC_DIR))
 
+from config import GRAPH_RESULTS_DIR, GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR
 from gnn_model import SEED, select_threshold
+
+_GRAPH_DIR = GRAPH_RESULTS_DIR
+_SPLITS_DIR = GRAPH_EVALUATION_DIR
+_ARTIFACTS_DIR = GRAPH_ARTIFACTS_DIR
 from oulad_data import (
     build_features,
     filter_window,

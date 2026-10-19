@@ -7,8 +7,13 @@ from pathlib import Path
 
 import pandas as pd
 
+import sys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-GRAPH_DIR = PROJECT_ROOT / "results" / "graph"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import GRAPH_RESULTS_DIR
+
+GRAPH_DIR = GRAPH_RESULTS_DIR
 COMPARISON_PATH = GRAPH_DIR / "comparison_results.csv"
 LCPO_PATH = GRAPH_DIR / "lcpo_results.csv"
 OUTPUT_PATH = GRAPH_DIR / "course_variation.csv"

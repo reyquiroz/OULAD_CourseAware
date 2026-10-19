@@ -156,19 +156,24 @@ def _col_letter_to_index(letter: str) -> int:
 
 def _load(path: Path) -> pd.DataFrame | None:
     if path.exists():
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+        # Filter out incomplete runs where best_epoch < 10
+        if "best_epoch" in df.columns:
+            df = df[df["best_epoch"] >= 10]
+        return df
     return None
 
 
 def _load_all_sources() -> dict[str, pd.DataFrame | None]:
     return {
-        "lgbm_matched":    _load(MATCHED_DIR / "lgbm_matched_results.csv"),
-        "mlp_matched":     _load(MATCHED_DIR / "mlp_matched_results.csv"),
-        "gnn_random":      _load(GRAPH_DIR / "random_student_results.csv"),
-        "gnn_lcpo":        _load(GRAPH_DIR / "lcpo_results.csv"),
-        "ablation":        _load(GRAPH_DIR / "ablation_results.csv"),
-        "zenodo_random":   _load(ZENODO_DIR / "random_student_results.csv"),
-        "zenodo_lcpo":     _load(ZENODO_DIR / "lcpo_results.csv"),
+        "lgbm_matched":      _load(MATCHED_DIR / "lgbm_matched_results.csv"),
+        "mlp_matched":       _load(MATCHED_DIR / "mlp_matched_results.csv"),
+        "gnn_random":        _load(GRAPH_DIR / "random_student_results.csv"),
+        "gnn_lcpo":          _load(GRAPH_DIR / "lcpo_results.csv"),
+        "ablation":          _load(GRAPH_DIR / "ablation_results.csv"),
+        "zenodo_random":     _load(ZENODO_DIR / "random_student_results.csv"),
+        "zenodo_lcpo":       _load(ZENODO_DIR / "lcpo_results.csv"),
+        "zenodo_comparison": _load(ZENODO_DIR / "comparison_results.csv"),
     }
 
 
@@ -291,14 +296,34 @@ def build_update_plan(sources: dict) -> list[dict]:
                         _add(sheet, 18, col, _fmt(m, s))
 
     # ── Zenodo results → cols N (random W8) and O (LCPO W8) ───────────────
+    # Zenodo LightGBM (row 12) from comparison_results.csv
+    zen_comp = sources.get("zenodo_comparison")
+    if zen_comp is not None and "model" in zen_comp.columns:
+        for sheet, metric in SHEET_TO_METRIC.items():
+            if metric not in zen_comp.columns:
+                continue
+            # LightGBM random W8 → row 12, col N
+            sub_lgbm_rand = zen_comp[
+                (zen_comp["model"].str.contains("LightGBM", case=False, na=False))
+                & (zen_comp["split_type"].isin(["random_student", "random"]))
+            ]
+            _add(sheet, 12, "N", _summarise(sub_lgbm_rand, metric))
+            # LightGBM LCPO W8 → row 12, col O
+            sub_lgbm_lcpo = zen_comp[
+                (zen_comp["model"].str.contains("LightGBM", case=False, na=False))
+                & (zen_comp["split_type"] == "lcpo")
+            ]
+            _add(sheet, 12, "O", _summarise(sub_lgbm_lcpo, metric))
+
     zen_rand = sources.get("zenodo_random")
     if zen_rand is not None and "model" in zen_rand.columns:
         for sheet, metric in SHEET_TO_METRIC.items():
-            # LightGBM matched on Zenodo → row 12, col N
+            # LightGBM matched on Zenodo if in zenodo_random → row 12, col N
             sub_lgbm = zen_rand[
                 zen_rand["model"].str.contains("LightGBM", case=False, na=False)
             ]
-            _add(sheet, 12, "N", _summarise(sub_lgbm, metric))
+            if not sub_lgbm.empty:
+                _add(sheet, 12, "N", _summarise(sub_lgbm, metric))
             # GraphSAGE base on Zenodo → row 18, col N
             sub_gnn = zen_rand[
                 zen_rand["model"].str.contains("GraphSAGE|GNN|Enrollment", case=False, na=False)
@@ -326,6 +351,13 @@ def build_update_plan(sources: dict) -> list[dict]:
                         m = per_fold.mean()
                         s = per_fold.std(ddof=1) if len(per_fold) > 1 else 0.0
                         _add(sheet, row, "O", _fmt(m, s))
+            elif fold_col:
+                # GraphSAGE LCPO on Zenodo (no model column, all rows are GNN)
+                per_fold = zen_lcpo.groupby(fold_col)[metric].mean()
+                if len(per_fold) > 0:
+                    m = per_fold.mean()
+                    s = per_fold.std(ddof=1) if len(per_fold) > 1 else 0.0
+                    _add(sheet, 18, "O", _fmt(m, s))
 
     return updates
 
@@ -364,11 +396,13 @@ def update_excel(
         # Try to determine which source key this CSV belongs to.
         sources: dict = {k: None for k in [
             "lgbm_matched", "mlp_matched", "gnn_random", "gnn_lcpo",
-            "ablation", "zenodo_random", "zenodo_lcpo",
+            "ablation", "zenodo_random", "zenodo_lcpo", "zenodo_comparison",
         ]}
         if csv_df is not None and "model" in csv_df.columns:
             model_vals = csv_df["model"].unique()
-            if any("LightGBM" in str(m) for m in model_vals):
+            if "dataset" in csv_df.columns and (csv_df["dataset"] == "zenodo").any():
+                sources["zenodo_comparison"] = csv_df
+            elif any("LightGBM" in str(m) for m in model_vals):
                 sources["lgbm_matched"] = csv_df
             elif any("MLP" in str(m) for m in model_vals):
                 sources["mlp_matched"] = csv_df

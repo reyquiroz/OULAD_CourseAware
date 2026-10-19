@@ -43,6 +43,12 @@ def main():
         default=[42],
         help="Random seeds to use (default: 42)",
     )
+    parser.add_argument(
+        "--use-enrollment-nodes",
+        action="store_true",
+        default=False,
+        help="Gate enrollment node loading in GraphDataLoader (default: False).",
+    )
     args = parser.parse_args()
 
     rows = []
@@ -63,6 +69,7 @@ def main():
                 seed=seed,
                 feature_mask=feature_mask,
                 use_interacted_with_attrs=use_iw_attrs,
+                use_enrollment_nodes=args.use_enrollment_nodes,
             )
             ablation_row = {
                 "condition": condition,

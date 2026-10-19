@@ -12,14 +12,25 @@ Implements the "matched protocol" from matched-comparison-plan.md:
   - Threshold: F1-max sweep on validation set.
   - Normalization (MLP only): StandardScaler fit on training rows only.
 
+Feature sets (--feature-set {A,B,C,D,E})
+-----------------------------------------
+  A : base — six behavioral summaries + num_of_prev_attempts, studied_credits,
+      age_band one-hot  (original matched set; default)
+  B : A + demographics one-hots  (gender, region, highest_education,
+      imd_band, disability)
+  C : A + course identity one-hots  (code_module, code_presentation)
+  D : A + demographics + course identity
+  E : D + four temporal features  (weeks_active, recency, activity_trend,
+      max_inactive_gap) pulled from the enrollment parquet artifacts
+
 Usage
 -----
   python src/run_matched_comparison.py --models lgbm mlp --weeks 2 4 6 8 \\
-      --seeds 42 123 7 17 99 --splits random lcpo
+      --seeds 42 123 7 17 99 --splits random lcpo --feature-set A
 
   # Quick smoke test (one week, one seed, random only):
   PYTHONPATH=src python src/run_matched_comparison.py \\
-      --models lgbm --weeks 8 --seeds 42 --splits random
+      --models lgbm --weeks 8 --seeds 42 --splits random --feature-set B
 """
 
 import argparse
@@ -48,6 +59,7 @@ from config import (
 )
 from oulad_data import (
     build_features,
+    exclude_early_unregistered,
     filter_window,
     load_oulad_data,
     random_student_split,
@@ -99,11 +111,43 @@ def _load_raw_data():
     )
 
 
+def _load_registration():
+    """Load and cache studentRegistration.csv from DATA_DIR."""
+    if "registration" not in _DATA_CACHE:
+        _DATA_CACHE["registration"] = pd.read_csv(DATA_DIR / "studentRegistration.csv")
+    return _DATA_CACHE["registration"]
+
+
 # ---------------------------------------------------------------------------
 # Feature building
 # ---------------------------------------------------------------------------
 
-def build_tabular_features(week: int, data=None):
+# Demographic columns in studentInfo that are one-hot encoded for set B/D/E.
+_DEMOGRAPHIC_COLS = ["gender", "region", "highest_education", "imd_band", "disability"]
+
+# Course identity columns one-hot encoded for set C/D/E.
+_COURSE_IDENTITY_COLS = ["code_module", "code_presentation"]
+
+# Temporal feature columns pulled from graph artifacts for set E.
+_TEMPORAL_COLS = ["weeks_active", "recency", "activity_trend", "max_inactive_gap"]
+
+# Mapping from feature-set letter to the three add_* flags.
+_FEATURE_SET_FLAGS = {
+    "A": dict(add_demographics=False, add_course_identity=False, add_temporal=False),
+    "B": dict(add_demographics=True,  add_course_identity=False, add_temporal=False),
+    "C": dict(add_demographics=False, add_course_identity=True,  add_temporal=False),
+    "D": dict(add_demographics=True,  add_course_identity=True,  add_temporal=False),
+    "E": dict(add_demographics=True,  add_course_identity=True,  add_temporal=True),
+}
+
+
+def build_tabular_features(
+    week: int,
+    data=None,
+    add_demographics: bool = False,
+    add_course_identity: bool = False,
+    add_temporal: bool = False,
+):
     """Build enrollment-level feature matrix for *week*.
 
     Applies the dual temporal guard (Strategy B):
@@ -116,6 +160,18 @@ def build_tabular_features(week: int, data=None):
     data : tuple or None
         Optional pre-loaded (student_info, student_vle, student_assess,
         assessments) to avoid reloading from disk per week.
+    add_demographics : bool
+        When True, one-hot encode gender, region, highest_education, imd_band,
+        and disability and append to the feature matrix (feature sets B/D/E).
+    add_course_identity : bool
+        When True, one-hot encode code_module and code_presentation and append
+        (feature sets C/D/E).
+    add_temporal : bool
+        When True, merge weeks_active, recency, activity_trend, and
+        max_inactive_gap from the graph enrollment artifacts and append
+        (feature set E).  Requires the parquet/CSV artifacts for *week* to
+        exist under GRAPH_ARTIFACTS_DIR.  After Sub-Task 6, inactive students
+        already carry the correct recency sentinel — no additional fillna needed.
 
     Returns
     -------
@@ -137,6 +193,13 @@ def build_tabular_features(week: int, data=None):
     # week * 7 converts week number to day-from-course-start (see PREDICTION_WINDOWS)
     window = PREDICTION_WINDOWS[f"week_{week}"]
 
+    # Drop enrollments already unregistered at the cutoff so the population
+    # matches the GNN pipeline (see graph_pipeline.apply_window_cutoff).
+    student_info, n_removed = exclude_early_unregistered(
+        student_info, _load_registration(), window
+    )
+    print(f"Week {week}: removed {n_removed} already-unregistered enrollments")
+
     vle_w, assess_w = filter_window(
         student_vle, student_assess, assessments,
         window=window,
@@ -155,6 +218,92 @@ def build_tabular_features(week: int, data=None):
     # Build feature column list dynamically (base cols present in df + age dummies)
     base_cols = [c for c in _BASE_FEATURE_COLS if c in df.columns]
     feature_cols = base_cols + age_dummy_cols
+
+    # ------------------------------------------------------------------
+    # Optional: demographics one-hots (feature sets B / D / E)
+    # ------------------------------------------------------------------
+    if add_demographics:
+        demo_src_cols = [c for c in _DEMOGRAPHIC_COLS if c in df.columns]
+        if demo_src_cols:
+            demo_dummies = pd.get_dummies(
+                df[demo_src_cols], prefix=demo_src_cols, drop_first=False
+            )
+            demo_dummies = sanitize_feature_names(demo_dummies)
+            df = pd.concat([df, demo_dummies], axis=1)
+            feature_cols = feature_cols + list(demo_dummies.columns)
+
+    # ------------------------------------------------------------------
+    # Optional: course identity one-hots (feature sets C / D / E)
+    # ------------------------------------------------------------------
+    if add_course_identity:
+        ci_src_cols = [c for c in _COURSE_IDENTITY_COLS if c in df.columns]
+        if ci_src_cols:
+            ci_dummies = pd.get_dummies(
+                df[ci_src_cols], prefix=ci_src_cols, drop_first=False
+            )
+            ci_dummies = sanitize_feature_names(ci_dummies)
+            df = pd.concat([df, ci_dummies], axis=1)
+            feature_cols = feature_cols + list(ci_dummies.columns)
+
+    # ------------------------------------------------------------------
+    # Optional: temporal features from graph artifacts (feature set E)
+    # ------------------------------------------------------------------
+    if add_temporal:
+        enroll_key = f"week{week:02d}_edges_enrolled_in"
+        artifact_base = GRAPH_ARTIFACTS_DIR / enroll_key
+        artifact_path = None
+        for ext in (".parquet", ".csv"):
+            candidate = artifact_base.with_suffix(ext)
+            if candidate.exists():
+                artifact_path = candidate
+                break
+        if artifact_path is None:
+            raise FileNotFoundError(
+                f"Temporal features requested (feature set E) but no artifact found at "
+                f"{artifact_base}.parquet / .csv — run graph_pipeline first."
+            )
+        if artifact_path.suffix == ".parquet":
+            temporal_df = pd.read_parquet(artifact_path)
+        else:
+            temporal_df = pd.read_csv(artifact_path)
+
+        # The artifact uses integer node indices (src/dst), not the original keys.
+        # Load the student / course-presentation node tables to reconstruct the join.
+        node_stu_path = None
+        for ext in (".parquet", ".csv"):
+            candidate = GRAPH_ARTIFACTS_DIR / f"week{week:02d}_nodes_student{ext}"
+            if candidate.exists():
+                node_stu_path = candidate
+                break
+        node_cp_path = None
+        for ext in (".parquet", ".csv"):
+            candidate = GRAPH_ARTIFACTS_DIR / f"week{week:02d}_nodes_course_presentation{ext}"
+            if candidate.exists():
+                node_cp_path = candidate
+                break
+
+        if node_stu_path is not None and node_cp_path is not None:
+            # Re-attach id_student / code_module / code_presentation from node tables
+            read = lambda p: pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+            stu_nodes = read(node_stu_path)[["id_student"]].reset_index().rename(columns={"index": "src"})
+            cp_nodes = read(node_cp_path)[["code_module", "code_presentation"]].reset_index().rename(columns={"index": "dst"})
+            temporal_df = temporal_df.merge(stu_nodes, on="src", how="left")
+            temporal_df = temporal_df.merge(cp_nodes, on="dst", how="left")
+
+        # Select only the four temporal columns plus the join keys, then merge.
+        join_keys = ["id_student", "code_module", "code_presentation"]
+        temporal_cols_present = [c for c in _TEMPORAL_COLS if c in temporal_df.columns]
+        if temporal_cols_present and all(k in temporal_df.columns for k in join_keys):
+            temporal_subset = temporal_df[join_keys + temporal_cols_present].drop_duplicates(join_keys)
+            # Ensure join keys exist in df (they should — code_module / code_presentation
+            # come from student_info; id_student is always present).
+            df = df.merge(temporal_subset, how="left", on=join_keys)
+            feature_cols = feature_cols + temporal_cols_present
+        else:
+            print(
+                "Warning: temporal artifact found but expected columns missing; "
+                "temporal features skipped."
+            )
 
     X = df[feature_cols].fillna(0).copy()
     X = sanitize_feature_names(X)  # sanitize again after concat (dummies may have <>)
@@ -248,21 +397,24 @@ def run_lgbm_matched(
     weeks: list,
     seeds: list,
     splits: list,
+    feature_set: str = "A",
 ) -> None:
     """Run matched LightGBM for all weeks and split types.
 
     Parameters
     ----------
-    weeks  : list of int — prediction weeks to evaluate.
-    seeds  : list of int — random seeds for the random-student split.
-    splits : list of str — any subset of ["random", "lcpo"].
+    weeks       : list of int — prediction weeks to evaluate.
+    seeds       : list of int — random seeds for the random-student split.
+    splits      : list of str — any subset of ["random", "lcpo"].
+    feature_set : str — one of "A"–"E" controlling which features are used.
     """
+    flags = _FEATURE_SET_FLAGS[feature_set]
     out_path = _MATCHED_DIR / "lgbm_matched_results.csv"
     all_rows = []
 
     for week in weeks:
-        print(f"\n=== LightGBM matched — week {week:02d} ===")
-        X, y, enrollment_df = build_tabular_features(week)
+        print(f"\n=== LightGBM matched — week {week:02d}  feature_set={feature_set} ===")
+        X, y, enrollment_df = build_tabular_features(week, **flags)
 
         # ------------------------------------------------------------------
         # Random-student split
@@ -300,6 +452,7 @@ def run_lgbm_matched(
                     "split_type": "random",
                     "seed": seed,
                     "fold": -1,
+                    "feature_set": feature_set,
                     **metrics,
                 }
                 all_rows.append(row)
@@ -376,6 +529,7 @@ def run_lgbm_matched(
                     "split_type": "lcpo",
                     "seed": -1,
                     "fold": fold_idx,
+                    "feature_set": feature_set,
                     **metrics,
                 }
                 all_rows.append(row)
@@ -392,7 +546,7 @@ def run_lgbm_matched(
     results_df = pd.DataFrame(all_rows)
     _append_or_create_csv(
         results_df, out_path,
-        dedup_keys=["model", "week", "split_type", "seed", "fold"],
+        dedup_keys=["model", "week", "split_type", "seed", "fold", "feature_set"],
     )
     print(f"\nResults written to {out_path}")
     _print_summary(results_df, "LightGBM_matched")
@@ -406,19 +560,31 @@ def run_mlp_matched(
     weeks: list,
     seeds: list,
     splits: list,
+    feature_set: str = "A",
 ) -> None:
     """Run matched MLP for all weeks and split types.
 
     Architecture: MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=500,
     early_stopping=True, validation_fraction=0.1).
     Normalization: StandardScaler fit on training rows only, applied to all splits.
+
+    Parameters
+    ----------
+    weeks       : list of int — prediction weeks to evaluate.
+    seeds       : list of int — random seeds for the random-student split.
+    splits      : list of str — any subset of ["random", "lcpo"].
+    feature_set : str — one of "A"–"E" controlling which features are used.
     """
+    flags = _FEATURE_SET_FLAGS[feature_set]
+    # Feature-set A uses only the six behavioral summaries; use a distinct model
+    # name so update_results_matrix.py can route it to the correct results row.
+    mlp_model_name = "MLP_behavioral_summaries" if feature_set == "A" else "MLP_all_features"
     out_path = _MATCHED_DIR / "mlp_matched_results.csv"
     all_rows = []
 
     for week in weeks:
-        print(f"\n=== MLP matched — week {week:02d} ===")
-        X, y, enrollment_df = build_tabular_features(week)
+        print(f"\n=== MLP matched — week {week:02d}  feature_set={feature_set} ===")
+        X, y, enrollment_df = build_tabular_features(week, **flags)
 
         # ------------------------------------------------------------------
         # Random-student split
@@ -463,11 +629,12 @@ def run_mlp_matched(
                 metrics = _compute_metrics(y_test, test_pred, test_proba, threshold)
 
                 row = {
-                    "model": "MLP_all_features",
+                    "model": mlp_model_name,
                     "week": week,
                     "split_type": "random",
                     "seed": seed,
                     "fold": -1,
+                    "feature_set": feature_set,
                     **metrics,
                 }
                 all_rows.append(row)
@@ -551,11 +718,12 @@ def run_mlp_matched(
                 metrics = _compute_metrics(y_test, test_pred, test_proba, threshold)
 
                 row = {
-                    "model": "MLP_all_features",
+                    "model": mlp_model_name,
                     "week": week,
                     "split_type": "lcpo",
                     "seed": -1,
                     "fold": fold_idx,
+                    "feature_set": feature_set,
                     **metrics,
                 }
                 all_rows.append(row)
@@ -572,10 +740,10 @@ def run_mlp_matched(
     results_df = pd.DataFrame(all_rows)
     _append_or_create_csv(
         results_df, out_path,
-        dedup_keys=["model", "week", "split_type", "seed", "fold"],
+        dedup_keys=["model", "week", "split_type", "seed", "fold", "feature_set"],
     )
     print(f"\nResults written to {out_path}")
-    _print_summary(results_df, "MLP_all_features")
+    _print_summary(results_df, mlp_model_name)
 
 
 # ---------------------------------------------------------------------------
@@ -636,22 +804,35 @@ def main():
         default=["random", "lcpo"],
         help="Which split types to run (default: random lcpo).",
     )
+    parser.add_argument(
+        "--feature-set",
+        choices=["A", "B", "C", "D", "E"],
+        default="A",
+        dest="feature_set",
+        help=(
+            "Feature configuration to use (default: A — original matched set). "
+            "A=base, B=A+demographics, C=A+course_identity, D=A+demo+course_id, "
+            "E=D+temporal."
+        ),
+    )
 
     args = parser.parse_args()
     weeks = args.weeks
     seeds = args.seeds
     splits = args.splits
+    feature_set = args.feature_set
 
-    print(f"Models : {args.models}")
-    print(f"Weeks  : {weeks}")
-    print(f"Seeds  : {seeds}")
-    print(f"Splits : {splits}")
+    print(f"Models      : {args.models}")
+    print(f"Weeks       : {weeks}")
+    print(f"Seeds       : {seeds}")
+    print(f"Splits      : {splits}")
+    print(f"Feature set : {feature_set}")
 
     if "lgbm" in args.models:
-        run_lgbm_matched(weeks=weeks, seeds=seeds, splits=splits)
+        run_lgbm_matched(weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set)
 
     if "mlp" in args.models:
-        run_mlp_matched(weeks=weeks, seeds=seeds, splits=splits)
+        run_mlp_matched(weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set)
 
 
 if __name__ == "__main__":

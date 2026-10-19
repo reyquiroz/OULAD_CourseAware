@@ -21,10 +21,15 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+import sys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ARTIFACTS_DIR = PROJECT_ROOT / "results" / "graph" / "artifacts"
-GRAPH_DIR = PROJECT_ROOT / "results" / "graph"
-EVAL_DIR = PROJECT_ROOT / "results" / "graph" / "evaluation"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from config import GRAPH_RESULTS_DIR, GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR
+
+ARTIFACTS_DIR = GRAPH_ARTIFACTS_DIR
+GRAPH_DIR = GRAPH_RESULTS_DIR
+EVAL_DIR = GRAPH_EVALUATION_DIR
 
 WEEK_TAG = {2: "week02", 4: "week04", 6: "week06", 8: "week08"}
 

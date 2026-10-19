@@ -58,7 +58,7 @@ import torch.nn as nn
 # Ensure src/ is importable regardless of working directory
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, ZENODO_RESULTS_DIR
 from zenodo_data import (
     build_enrollment_supervision_zenodo,
     build_features_zenodo,
@@ -74,7 +74,7 @@ from zenodo_data import (
 # Paths
 # ---------------------------------------------------------------------------
 
-_ZENODO_RESULTS_DIR = PROJECT_ROOT / "results" / "zenodo"
+_ZENODO_RESULTS_DIR = ZENODO_RESULTS_DIR
 _ARTIFACTS_DIR = _ZENODO_RESULTS_DIR / "artifacts"
 _EVAL_DIR = _ZENODO_RESULTS_DIR / "evaluation"
 
