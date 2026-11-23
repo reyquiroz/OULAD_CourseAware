@@ -1,0 +1,22 @@
+{
+  "recorded_at_utc": "2026-11-23T02:01:48+00:00",
+  "platform": "macOS-15.6-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu_model": "Apple M1 Max",
+  "cpu_cores": 10,
+  "ram_gb": 32.0,
+  "python": "3.11.11",
+  "torch_cuda_available": false,
+  "device_used": "cpu",
+  "packages": {
+    "torch": "2.12.1",
+    "torch_geometric": "2.8.0",
+    "scikit-learn": "1.9.0",
+    "pandas": "3.0.3",
+    "numpy": "2.4.6",
+    "pyarrow": "24.0.0",
+    "lightgbm": "4.6.0",
+    "openpyxl": "3.1.5",
+    "scipy": "1.17.1"
+  }
+}

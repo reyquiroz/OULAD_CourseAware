@@ -24,8 +24,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # Artifact presence guard — skip tests that need real parquet files on CI
 # ---------------------------------------------------------------------------
 
-_ARTIFACT_DIR = Path("results/graph/artifacts")
-_SPLIT_DIR = Path("results/graph/evaluation/week08/splits")
+from config import GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR  # noqa: E402
+
+_ARTIFACT_DIR = GRAPH_ARTIFACTS_DIR
+_SPLIT_DIR = GRAPH_EVALUATION_DIR / "week08" / "splits"
 ARTIFACTS_PRESENT = (
     (_ARTIFACT_DIR / "week08_enrollments.parquet").exists()
     and (_SPLIT_DIR / "week08_random_split.parquet").exists()
@@ -177,7 +179,7 @@ def test_enrolled_in_edge_attr_shape():
 
 @pytest.mark.skipif(not ARTIFACTS_PRESENT, reason="artifacts not found")
 def test_edge_attr_reaches_prediction_head():
-    """Forward pass produces one logit per enrolled_in edge (32,593 for week 8)."""
+    """Forward pass produces one logit per enrolled_in edge (week-8 enrollment count)."""
     from gnn_model import GraphDataLoader, EnrollmentGNN
 
     data = GraphDataLoader(week=8).load()
@@ -199,9 +201,12 @@ def test_edge_attr_reaches_prediction_head():
     assert logits.shape[0] == expected_n, (
         f"logits length {logits.shape[0]} != enrolled_in edge count {expected_n}"
     )
-    # Week-8 specific sanity check
-    assert expected_n == 32593, (
-        f"Expected 32593 enrollments for week 8, got {expected_n}"
+    # The enrollment table is the supervision source: one logit per row. The count
+    # is read from the artifact, not hard-coded, because exclude_early_unregistered
+    # makes it differ by week.
+    n_enrollments = len(pd.read_parquet(_ARTIFACT_DIR / "week08_enrollments.parquet"))
+    assert expected_n == n_enrollments, (
+        f"Expected {n_enrollments} enrollments for week 8, got {expected_n}"
     )
 
 

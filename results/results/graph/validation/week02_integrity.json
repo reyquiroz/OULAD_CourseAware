@@ -1,7 +1,7 @@
 {
   "week": 2,
-  "elapsed_seconds": 43.33,
-  "peak_memory_mb": 982.7,
+  "elapsed_seconds": 44.47,
+  "peak_memory_mb": 915.5,
   "integrity": {
     "dup_nodes_student": 0,
     "dup_nodes_course_presentation": 0,
@@ -19,22 +19,22 @@
     "null_values_course_presentation": 0,
     "null_values_assessment": 0,
     "null_values_vle_resource": 0,
-    "label_at_risk": 17208,
+    "label_at_risk": 12734,
     "label_success": 15385,
-    "label_at_risk_rate": 0.528
+    "label_at_risk_rate": 0.4529
   },
   "node_counts": {
-    "student": 28785,
+    "student": 25266,
     "course_presentation": 22,
     "assessment": 1,
     "vle_resource": 6364
   },
   "edge_counts": {
-    "enrolled_in": 32593,
+    "enrolled_in": 28119,
     "contains_assess": 1,
     "has_resource": 6364,
-    "submitted": 1089,
-    "interacted_with": 634723
+    "submitted": 1086,
+    "interacted_with": 613000
   },
-  "enrollment_count": 32593
+  "enrollment_count": 28119
 }

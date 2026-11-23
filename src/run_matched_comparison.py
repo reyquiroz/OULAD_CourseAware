@@ -12,10 +12,13 @@ Implements the "matched protocol" from matched-comparison-plan.md:
   - Threshold: F1-max sweep on validation set.
   - Normalization (MLP only): StandardScaler fit on training rows only.
 
-Feature sets (--feature-set {A,B,C,D,E})
------------------------------------------
+Feature sets (--feature-set {A,B,C,D,E,S})
+-------------------------------------------
   A : base — six behavioral summaries + num_of_prev_attempts, studied_credits,
       age_band one-hot  (original matched set; default)
+  S : the six behavioral summaries ONLY (vle_total, vle_mean, vle_std, assess_mean,
+      assess_max, assess_count). No previous attempts, credits or age band. This is
+      the control that matches the GNN "+ six summaries" input.
   B : A + demographics one-hots  (gender, region, highest_education,
       imd_band, disability)
   C : A + course identity one-hots  (code_module, code_presentation)
@@ -53,7 +56,7 @@ sys.path.insert(0, str(_SRC_DIR))
 from config import (
     DATA_DIR,
     GRAPH_ARTIFACTS_DIR,
-    GRAPH_EVALUATION_DIR,
+    PIPELINE_VERSION,
     PREDICTION_WINDOWS,
     RESULTS_DIR,
 )
@@ -62,15 +65,18 @@ from oulad_data import (
     exclude_early_unregistered,
     filter_window,
     load_oulad_data,
-    random_student_split,
     sanitize_feature_names,
 )
+from split_loader import load_lcpo_folds, load_lcpo_masks, load_random_split
 
 # ---------------------------------------------------------------------------
 # Output directory
 # ---------------------------------------------------------------------------
 
 _MATCHED_DIR = RESULTS_DIR / "matched"
+
+DEFAULT_MODEL_SEEDS = [42, 123, 7, 17, 99]
+_DEDUP_KEYS = ["model", "week", "split_type", "seed", "model_seed", "fold", "feature_set"]
 
 # ---------------------------------------------------------------------------
 # Feature columns (base set — age_band dummies added dynamically)
@@ -85,6 +91,17 @@ _BASE_FEATURE_COLS = [
     "assess_count",
     "num_of_prev_attempts",
     "studied_credits",
+]
+
+# The six behavioral summaries (feature set S). Everything else in the base set
+# (num_of_prev_attempts, studied_credits, age-band dummies) is enrollment metadata.
+_SIX_SUMMARY_COLS = [
+    "vle_total",
+    "vle_mean",
+    "vle_std",
+    "assess_mean",
+    "assess_max",
+    "assess_count",
 ]
 
 # ---------------------------------------------------------------------------
@@ -138,6 +155,19 @@ _FEATURE_SET_FLAGS = {
     "C": dict(add_demographics=False, add_course_identity=True,  add_temporal=False),
     "D": dict(add_demographics=True,  add_course_identity=True,  add_temporal=False),
     "E": dict(add_demographics=True,  add_course_identity=True,  add_temporal=True),
+    "S": dict(add_demographics=False, add_course_identity=False, add_temporal=False,
+              behavioral_only=True),
+}
+
+# Explicit feature set -> MLP model label (results CSV `model` column). Every set has its
+# own label, so no two feature sets can land in the same matrix row.
+_MLP_MODEL_NAMES = {
+    "A": "MLP_all_features",
+    "B": "MLP_feature_set_B",
+    "C": "MLP_feature_set_C",
+    "D": "MLP_feature_set_D",
+    "E": "MLP_feature_set_E",
+    "S": "MLP_six_summaries",
 }
 
 
@@ -147,6 +177,7 @@ def build_tabular_features(
     add_demographics: bool = False,
     add_course_identity: bool = False,
     add_temporal: bool = False,
+    behavioral_only: bool = False,
 ):
     """Build enrollment-level feature matrix for *week*.
 
@@ -172,6 +203,10 @@ def build_tabular_features(
         (feature set E).  Requires the parquet/CSV artifacts for *week* to
         exist under GRAPH_ARTIFACTS_DIR.  After Sub-Task 6, inactive students
         already carry the correct recency sentinel — no additional fillna needed.
+    behavioral_only : bool
+        When True (feature set S), keep only the six behavioral summaries
+        (``_SIX_SUMMARY_COLS``): no num_of_prev_attempts, studied_credits or age
+        band. Cannot be combined with the add_* options.
 
     Returns
     -------
@@ -182,9 +217,12 @@ def build_tabular_features(
         Binary at-risk labels aligned to X.
     enrollment_df : pd.DataFrame
         Full DataFrame including id_student, code_module, code_presentation and
-        all other columns produced by build_features().  Needed to derive split
-        masks via random_student_split() or to cross-reference LCPO folds.
+        all other columns produced by build_features().  Passed to split_loader so the
+        persisted masks are aligned by enrollment triple.
     """
+    if behavioral_only and (add_demographics or add_course_identity or add_temporal):
+        raise ValueError("behavioral_only (feature set S) cannot be combined with add_* options")
+
     if data is None:
         student_info, student_vle, student_assess, assessments = _load_raw_data()
     else:
@@ -216,8 +254,14 @@ def build_tabular_features(
     age_dummy_cols = list(age_dummies.columns)
 
     # Build feature column list dynamically (base cols present in df + age dummies)
-    base_cols = [c for c in _BASE_FEATURE_COLS if c in df.columns]
-    feature_cols = base_cols + age_dummy_cols
+    if behavioral_only:
+        missing = [c for c in _SIX_SUMMARY_COLS if c not in df.columns]
+        if missing:
+            raise ValueError(f"Feature set S needs {missing}, absent from build_features() output")
+        feature_cols = list(_SIX_SUMMARY_COLS)
+    else:
+        base_cols = [c for c in _BASE_FEATURE_COLS if c in df.columns]
+        feature_cols = base_cols + age_dummy_cols
 
     # ------------------------------------------------------------------
     # Optional: demographics one-hots (feature sets B / D / E)
@@ -398,6 +442,7 @@ def run_lgbm_matched(
     seeds: list,
     splits: list,
     feature_set: str = "A",
+    model_seeds: list = None,
 ) -> None:
     """Run matched LightGBM for all weeks and split types.
 
@@ -406,8 +451,14 @@ def run_lgbm_matched(
     weeks       : list of int — prediction weeks to evaluate.
     seeds       : list of int — random seeds for the random-student split.
     splits      : list of str — any subset of ["random", "lcpo"].
-    feature_set : str — one of "A"–"E" controlling which features are used.
+    feature_set : str — one of "A"–"E" or "S" controlling which features are used.
+    model_seeds : list of int — model-initialisation seeds for LCPO folds (one fit per
+                  seed per fold; default 42 123 7 17 99). Not the split seed: the LCPO
+                  folds are fixed, so ``seed`` is -1 in LCPO rows and the init seed is
+                  recorded in ``model_seed``. Random-split rows use ``seed`` for both.
     """
+    if model_seeds is None:
+        model_seeds = DEFAULT_MODEL_SEEDS
     flags = _FEATURE_SET_FLAGS[feature_set]
     out_path = _MATCHED_DIR / "lgbm_matched_results.csv"
     all_rows = []
@@ -422,8 +473,8 @@ def run_lgbm_matched(
         if "random" in splits:
             print(f"  [random split] seeds: {seeds}")
             for seed in seeds:
-                train_mask, val_mask, test_mask = random_student_split(
-                    enrollment_df, val_frac=0.1, test_frac=0.2, seed=seed
+                train_mask, val_mask, test_mask = load_random_split(
+                    week, seed, frame=enrollment_df
                 )
 
                 X_train = X[train_mask.values]
@@ -451,9 +502,11 @@ def run_lgbm_matched(
                     "week": week,
                     "split_type": "random",
                     "seed": seed,
+                    "model_seed": seed,
                     "fold": -1,
                     "feature_set": feature_set,
                     **metrics,
+                    "pipeline_version": PIPELINE_VERSION,
                 }
                 all_rows.append(row)
                 print(
@@ -465,39 +518,22 @@ def run_lgbm_matched(
         # LCPO split
         # ------------------------------------------------------------------
         if "lcpo" in splits:
-            folds_path = (
-                GRAPH_EVALUATION_DIR
-                / f"week{week:02d}"
-                / "splits"
-                / f"week{week:02d}_lcpo_folds.csv"
-            )
-            folds_df = pd.read_csv(folds_path)
-            print(f"  [LCPO] {len(folds_df)} folds from {folds_path}")
+            folds_df = load_lcpo_folds(week)
+            print(f"  [LCPO] {len(folds_df)} folds, model seeds: {model_seeds}")
 
             for _, fold_row in folds_df.iterrows():
                 fold_idx = int(fold_row["fold_idx"])
                 held_mod = fold_row["held_out_module"]
                 held_pres = fold_row["held_out_presentation"]
 
-                is_held_out = (
-                    (enrollment_df["code_module"] == held_mod)
-                    & (enrollment_df["code_presentation"] == held_pres)
-                )
-                train_all_mask = (~is_held_out).values
-                test_mask_lc = is_held_out.values
-
-                # Val: 10% of train students, seeded by fold_idx (matches GNN LCPO)
-                train_student_ids = enrollment_df.loc[train_all_mask, "id_student"].unique()
-                rng = np.random.default_rng(fold_idx)
-                val_size = max(1, int(0.10 * len(train_student_ids)))
-                val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
-                val_student_set = set(val_student_ids)
-
-                val_mask_lc = (
-                    train_all_mask
-                    & enrollment_df["id_student"].isin(val_student_set).to_numpy()
-                )
-                train_mask_lc = train_all_mask & ~val_mask_lc
+                # Persisted train/val/test masks shared with the GNN (save_graph_splits.py)
+                tr_s, va_s, te_s = load_lcpo_masks(week, fold_idx, frame=enrollment_df)
+                train_mask_lc = tr_s.to_numpy()
+                val_mask_lc = va_s.to_numpy()
+                test_mask_lc = te_s.to_numpy()
+                held = enrollment_df.loc[test_mask_lc]
+                assert (held["code_module"] == held_mod).all()
+                assert (held["code_presentation"] == held_pres).all()
 
                 X_train = X[train_mask_lc]
                 y_train = y[train_mask_lc]
@@ -510,34 +546,36 @@ def run_lgbm_matched(
                     print(f"    fold {fold_idx:02d}: SKIP (single class in test)")
                     continue
 
-                model = LGBMClassifier(n_estimators=200, random_state=42, verbose=-1)
-                model.fit(X_train, y_train)
+                for mseed in model_seeds:
+                    model = LGBMClassifier(n_estimators=200, random_state=mseed, verbose=-1)
+                    model.fit(X_train, y_train)
 
-                val_proba = model.predict_proba(X_val)[:, 1]
-                if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
-                    threshold = _select_threshold(val_proba, y_val.values)
-                else:
-                    threshold = 0.5
+                    val_proba = model.predict_proba(X_val)[:, 1]
+                    if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
+                        threshold = _select_threshold(val_proba, y_val.values)
+                    else:
+                        threshold = 0.5
 
-                test_proba = model.predict_proba(X_test)[:, 1]
-                test_pred = (test_proba >= threshold).astype(int)
-                metrics = _compute_metrics(y_test.values, test_pred, test_proba, threshold)
+                    test_proba = model.predict_proba(X_test)[:, 1]
+                    test_pred = (test_proba >= threshold).astype(int)
+                    metrics = _compute_metrics(y_test.values, test_pred, test_proba, threshold)
 
-                row = {
-                    "model": "LightGBM_matched",
-                    "week": week,
-                    "split_type": "lcpo",
-                    "seed": -1,
-                    "fold": fold_idx,
-                    "feature_set": feature_set,
-                    **metrics,
-                }
-                all_rows.append(row)
-                print(
-                    f"    fold {fold_idx:02d} ({held_mod}/{held_pres})"
-                    f"  auroc={metrics['auroc']:.4f}"
-                    f"  f1={metrics['f1']:.4f}"
-                )
+                    all_rows.append({
+                        "model": "LightGBM_matched",
+                        "week": week,
+                        "split_type": "lcpo",
+                        "seed": -1,
+                        "model_seed": mseed,
+                        "fold": fold_idx,
+                        "feature_set": feature_set,
+                        **metrics,
+                        "pipeline_version": PIPELINE_VERSION,
+                    })
+                    print(
+                        f"    fold {fold_idx:02d} ({held_mod}/{held_pres}) mseed={mseed}"
+                        f"  auroc={metrics['auroc']:.4f}"
+                        f"  f1={metrics['f1']:.4f}"
+                    )
 
     if not all_rows:
         print("No results produced.")
@@ -546,7 +584,7 @@ def run_lgbm_matched(
     results_df = pd.DataFrame(all_rows)
     _append_or_create_csv(
         results_df, out_path,
-        dedup_keys=["model", "week", "split_type", "seed", "fold", "feature_set"],
+        dedup_keys=_DEDUP_KEYS,
     )
     print(f"\nResults written to {out_path}")
     _print_summary(results_df, "LightGBM_matched")
@@ -561,6 +599,7 @@ def run_mlp_matched(
     seeds: list,
     splits: list,
     feature_set: str = "A",
+    model_seeds: list = None,
 ) -> None:
     """Run matched MLP for all weeks and split types.
 
@@ -573,12 +612,18 @@ def run_mlp_matched(
     weeks       : list of int — prediction weeks to evaluate.
     seeds       : list of int — random seeds for the random-student split.
     splits      : list of str — any subset of ["random", "lcpo"].
-    feature_set : str — one of "A"–"E" controlling which features are used.
+    feature_set : str — one of "A"–"E" or "S" controlling which features are used.
+    model_seeds : list of int — model-initialisation seeds for LCPO folds (one fit per
+                  seed per fold; default 42 123 7 17 99). Not the split seed: the LCPO
+                  folds are fixed, so ``seed`` is -1 in LCPO rows and the init seed is
+                  recorded in ``model_seed``. Random-split rows use ``seed`` for both.
     """
+    if model_seeds is None:
+        model_seeds = DEFAULT_MODEL_SEEDS
     flags = _FEATURE_SET_FLAGS[feature_set]
-    # Feature-set A uses only the six behavioral summaries; use a distinct model
-    # name so update_results_matrix.py can route it to the correct results row.
-    mlp_model_name = "MLP_behavioral_summaries" if feature_set == "A" else "MLP_all_features"
+    # One label per feature set (see _MLP_MODEL_NAMES) so update_results_matrix.py routes
+    # A -> row 16 (all features) and S -> row 17 (six summaries only) without collisions.
+    mlp_model_name = _MLP_MODEL_NAMES[feature_set]
     out_path = _MATCHED_DIR / "mlp_matched_results.csv"
     all_rows = []
 
@@ -592,8 +637,8 @@ def run_mlp_matched(
         if "random" in splits:
             print(f"  [random split] seeds: {seeds}")
             for seed in seeds:
-                train_mask, val_mask, test_mask = random_student_split(
-                    enrollment_df, val_frac=0.1, test_frac=0.2, seed=seed
+                train_mask, val_mask, test_mask = load_random_split(
+                    week, seed, frame=enrollment_df
                 )
 
                 X_train_raw = X[train_mask.values].values
@@ -633,9 +678,11 @@ def run_mlp_matched(
                     "week": week,
                     "split_type": "random",
                     "seed": seed,
+                    "model_seed": seed,
                     "fold": -1,
                     "feature_set": feature_set,
                     **metrics,
+                    "pipeline_version": PIPELINE_VERSION,
                 }
                 all_rows.append(row)
                 print(
@@ -647,39 +694,22 @@ def run_mlp_matched(
         # LCPO split
         # ------------------------------------------------------------------
         if "lcpo" in splits:
-            folds_path = (
-                GRAPH_EVALUATION_DIR
-                / f"week{week:02d}"
-                / "splits"
-                / f"week{week:02d}_lcpo_folds.csv"
-            )
-            folds_df = pd.read_csv(folds_path)
-            print(f"  [LCPO] {len(folds_df)} folds from {folds_path}")
+            folds_df = load_lcpo_folds(week)
+            print(f"  [LCPO] {len(folds_df)} folds, model seeds: {model_seeds}")
 
             for _, fold_row in folds_df.iterrows():
                 fold_idx = int(fold_row["fold_idx"])
                 held_mod = fold_row["held_out_module"]
                 held_pres = fold_row["held_out_presentation"]
 
-                is_held_out = (
-                    (enrollment_df["code_module"] == held_mod)
-                    & (enrollment_df["code_presentation"] == held_pres)
-                )
-                train_all_mask = (~is_held_out).values
-                test_mask_lc = is_held_out.values
-
-                # Val: 10% of train students, seeded by fold_idx (matches GNN LCPO)
-                train_student_ids = enrollment_df.loc[train_all_mask, "id_student"].unique()
-                rng = np.random.default_rng(fold_idx)
-                val_size = max(1, int(0.10 * len(train_student_ids)))
-                val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
-                val_student_set = set(val_student_ids)
-
-                val_mask_lc = (
-                    train_all_mask
-                    & enrollment_df["id_student"].isin(val_student_set).to_numpy()
-                )
-                train_mask_lc = train_all_mask & ~val_mask_lc
+                # Persisted train/val/test masks shared with the GNN (save_graph_splits.py)
+                tr_s, va_s, te_s = load_lcpo_masks(week, fold_idx, frame=enrollment_df)
+                train_mask_lc = tr_s.to_numpy()
+                val_mask_lc = va_s.to_numpy()
+                test_mask_lc = te_s.to_numpy()
+                held = enrollment_df.loc[test_mask_lc]
+                assert (held["code_module"] == held_mod).all()
+                assert (held["code_presentation"] == held_pres).all()
 
                 X_train_raw = X[train_mask_lc].values
                 y_train = y[train_mask_lc].values
@@ -698,40 +728,42 @@ def run_mlp_matched(
                 X_val = scaler.transform(X_val_raw)
                 X_test = scaler.transform(X_test_raw)
 
-                model = MLPClassifier(
-                    hidden_layer_sizes=(128, 64),
-                    max_iter=500,
-                    early_stopping=True,
-                    validation_fraction=0.1,
-                    random_state=42,
-                )
-                model.fit(X_train, y_train)
+                for mseed in model_seeds:
+                    model = MLPClassifier(
+                        hidden_layer_sizes=(128, 64),
+                        max_iter=500,
+                        early_stopping=True,
+                        validation_fraction=0.1,
+                        random_state=mseed,
+                    )
+                    model.fit(X_train, y_train)
 
-                val_proba = model.predict_proba(X_val)[:, 1]
-                if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
-                    threshold = _select_threshold(val_proba, y_val)
-                else:
-                    threshold = 0.5
+                    val_proba = model.predict_proba(X_val)[:, 1]
+                    if y_val.sum() > 0 and (len(y_val) - y_val.sum()) > 0:
+                        threshold = _select_threshold(val_proba, y_val)
+                    else:
+                        threshold = 0.5
 
-                test_proba = model.predict_proba(X_test)[:, 1]
-                test_pred = (test_proba >= threshold).astype(int)
-                metrics = _compute_metrics(y_test, test_pred, test_proba, threshold)
+                    test_proba = model.predict_proba(X_test)[:, 1]
+                    test_pred = (test_proba >= threshold).astype(int)
+                    metrics = _compute_metrics(y_test, test_pred, test_proba, threshold)
 
-                row = {
-                    "model": mlp_model_name,
-                    "week": week,
-                    "split_type": "lcpo",
-                    "seed": -1,
-                    "fold": fold_idx,
-                    "feature_set": feature_set,
-                    **metrics,
-                }
-                all_rows.append(row)
-                print(
-                    f"    fold {fold_idx:02d} ({held_mod}/{held_pres})"
-                    f"  auroc={metrics['auroc']:.4f}"
-                    f"  f1={metrics['f1']:.4f}"
-                )
+                    all_rows.append({
+                        "model": mlp_model_name,
+                        "week": week,
+                        "split_type": "lcpo",
+                        "seed": -1,
+                        "model_seed": mseed,
+                        "fold": fold_idx,
+                        "feature_set": feature_set,
+                        **metrics,
+                        "pipeline_version": PIPELINE_VERSION,
+                    })
+                    print(
+                        f"    fold {fold_idx:02d} ({held_mod}/{held_pres}) mseed={mseed}"
+                        f"  auroc={metrics['auroc']:.4f}"
+                        f"  f1={metrics['f1']:.4f}"
+                    )
 
     if not all_rows:
         print("No results produced.")
@@ -740,7 +772,7 @@ def run_mlp_matched(
     results_df = pd.DataFrame(all_rows)
     _append_or_create_csv(
         results_df, out_path,
-        dedup_keys=["model", "week", "split_type", "seed", "fold", "feature_set"],
+        dedup_keys=_DEDUP_KEYS,
     )
     print(f"\nResults written to {out_path}")
     _print_summary(results_df, mlp_model_name)
@@ -798,6 +830,14 @@ def main():
         help="Random seeds for random-student split (default: 42 123 7 17 99).",
     )
     parser.add_argument(
+        "--model-seeds",
+        nargs="+",
+        type=int,
+        default=DEFAULT_MODEL_SEEDS,
+        dest="model_seeds",
+        help="Model-init seeds for LCPO folds (default: 42 123 7 17 99). Not the split seed.",
+    )
+    parser.add_argument(
         "--splits",
         nargs="+",
         choices=["random", "lcpo"],
@@ -806,13 +846,13 @@ def main():
     )
     parser.add_argument(
         "--feature-set",
-        choices=["A", "B", "C", "D", "E"],
+        choices=["A", "B", "C", "D", "E", "S"],
         default="A",
         dest="feature_set",
         help=(
             "Feature configuration to use (default: A — original matched set). "
             "A=base, B=A+demographics, C=A+course_identity, D=A+demo+course_id, "
-            "E=D+temporal."
+            "E=D+temporal, S=six behavioral summaries only."
         ),
     )
 
@@ -824,15 +864,22 @@ def main():
 
     print(f"Models      : {args.models}")
     print(f"Weeks       : {weeks}")
-    print(f"Seeds       : {seeds}")
+    print(f"Seeds       : {seeds}  (split seeds)")
+    print(f"Model seeds : {args.model_seeds}  (LCPO init seeds)")
     print(f"Splits      : {splits}")
     print(f"Feature set : {feature_set}")
 
     if "lgbm" in args.models:
-        run_lgbm_matched(weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set)
+        run_lgbm_matched(
+            weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set,
+            model_seeds=args.model_seeds,
+        )
 
     if "mlp" in args.models:
-        run_mlp_matched(weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set)
+        run_mlp_matched(
+            weeks=weeks, seeds=seeds, splits=splits, feature_set=feature_set,
+            model_seeds=args.model_seeds,
+        )
 
 
 if __name__ == "__main__":

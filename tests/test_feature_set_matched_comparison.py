@@ -25,6 +25,7 @@ from run_matched_comparison import (
     _DEMOGRAPHIC_COLS,
     _COURSE_IDENTITY_COLS,
     _FEATURE_SET_FLAGS,
+    _SIX_SUMMARY_COLS,
     build_tabular_features,
 )
 
@@ -236,8 +237,8 @@ class TestFeatureSetC:
 class TestFeatureSetFlags:
     """Verify the _FEATURE_SET_FLAGS mapping drives the correct kwargs."""
 
-    def test_all_five_sets_present(self):
-        assert set(_FEATURE_SET_FLAGS.keys()) == {"A", "B", "C", "D", "E"}
+    def test_all_six_sets_present(self):
+        assert set(_FEATURE_SET_FLAGS.keys()) == {"A", "B", "C", "D", "E", "S"}
 
     def test_a_all_false(self):
         assert _FEATURE_SET_FLAGS["A"] == dict(
@@ -297,3 +298,62 @@ class TestFeatureSetColumnSanity:
         assert len(X) == len(y) == len(enrollment_df), (
             "X, y, and enrollment_df must all have the same number of rows."
         )
+
+
+class TestFeatureSetS:
+    """Feature set S: exactly the six behavioral summaries, nothing else."""
+
+    def _build(self, monkeypatch, **kw):
+        _patch_registration(monkeypatch)
+        return build_tabular_features(8, data=_make_synthetic_data(), behavioral_only=True, **kw)
+
+    def test_columns_are_exactly_the_six_summaries(self, monkeypatch):
+        X, _, _ = self._build(monkeypatch)
+        assert list(X.columns) == _SIX_SUMMARY_COLS
+        assert _SIX_SUMMARY_COLS == [
+            "vle_total", "vle_mean", "vle_std", "assess_mean", "assess_max", "assess_count",
+        ]
+
+    def test_no_enrollment_metadata(self, monkeypatch):
+        X, _, _ = self._build(monkeypatch)
+        assert "num_of_prev_attempts" not in X.columns
+        assert "studied_credits" not in X.columns
+        assert not [c for c in X.columns if c.startswith("age_band")]
+
+    def test_no_nans_and_aligned_lengths(self, monkeypatch):
+        X, y, df = self._build(monkeypatch)
+        assert not X.isnull().any().any()
+        assert len(X) == len(y) == len(df)
+
+    def test_set_a_is_unchanged_and_larger(self, monkeypatch):
+        _patch_registration(monkeypatch)
+        data = _make_synthetic_data()
+        X_a, _, _ = build_tabular_features(8, data=data)
+        X_s, _, _ = build_tabular_features(8, data=data, behavioral_only=True)
+        assert set(X_s.columns) < set(X_a.columns)
+        assert {"num_of_prev_attempts", "studied_credits"} <= set(X_a.columns)
+
+    def test_same_rows_and_labels_as_set_a(self, monkeypatch):
+        _patch_registration(monkeypatch)
+        data = _make_synthetic_data()
+        _, y_a, df_a = build_tabular_features(8, data=data)
+        X_s, y_s, df_s = build_tabular_features(8, data=data, behavioral_only=True)
+        assert df_a[["id_student", "code_module", "code_presentation"]].equals(
+            df_s[["id_student", "code_module", "code_presentation"]]
+        )
+        assert y_a.equals(y_s)
+
+    def test_cannot_be_combined_with_other_options(self, monkeypatch):
+        _patch_registration(monkeypatch)
+        with pytest.raises(ValueError, match="cannot be combined"):
+            build_tabular_features(
+                8, data=_make_synthetic_data(), behavioral_only=True, add_demographics=True
+            )
+
+    def test_flags_entry(self):
+        f = _FEATURE_SET_FLAGS["S"]
+        assert f["behavioral_only"] is True
+        assert f["add_demographics"] is False
+        assert f["add_course_identity"] is False
+        assert f["add_temporal"] is False
+        assert "behavioral_only" not in _FEATURE_SET_FLAGS["A"]

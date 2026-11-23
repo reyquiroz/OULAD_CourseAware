@@ -2,21 +2,21 @@
   OULAD Graph Validation Summary — Week 2
 ====================================================================
 
-Construction runtime : 43.33 s  |  Peak memory : 982.7 MB
+Construction runtime : 44.47 s  |  Peak memory : 915.5 MB
 
 ── Node counts ──────────────────────────────────────────────────
-  student                       28,785
+  student                       25,266
   course_presentation               22
   assessment                         1
   vle_resource                   6,364
 
 ── Edge counts ──────────────────────────────────────────────────
-  enrolled_in                   32,593
+  enrolled_in                   28,119
   contains_assess                    1
   has_resource                   6,364
-  submitted                      1,089
-  interacted_with              634,723
-  enrollments                   32,593
+  submitted                      1,086
+  interacted_with              613,000
+  enrollments                   28,119
 
 ── Duplicates ───────────────────────────────────────────────────
   Duplicate nodes (all types) : 0
@@ -32,8 +32,8 @@ Construction runtime : 43.33 s  |  Peak memory : 982.7 MB
   All edge endpoints resolve to known nodes. ✓
 
 ── Data quality — pre-imputation audit (from pipeline metadata) ──
-  nodes_student                  total=   971  [expected, resolved by imputation]
-    columns: imd_band: 971
+  nodes_student                  total=   914  [expected, resolved by imputation]
+    columns: imd_band: 914
   nodes_course_presentation      total=     0
   nodes_assessment               total=     0
   nodes_vle_resource             total= 10486  [expected, resolved by imputation]
@@ -59,30 +59,30 @@ Construction runtime : 43.33 s  |  Peak memory : 982.7 MB
   All imputed nulls resolved. ✓
 
 ── Label distribution ───────────────────────────────────────────
-  Overall : at-risk=17,208  success=15,385  total=32,593  at-risk-rate=52.8%
+  Overall : at-risk=12,734  success=15,385  total=28,119  at-risk-rate=45.3%
   By course presentation:
-    AAA_2013J          at-risk=  105  success=  278  rate=27.4%
-    AAA_2014J          at-risk=  112  success=  253  rate=30.7%
-    BBB_2013B          at-risk=  964  success=  803  rate=54.6%
-    BBB_2013J          at-risk= 1165  success= 1072  rate=52.1%
-    BBB_2014B          at-risk=  886  success=  727  rate=54.9%
-    BBB_2014J          at-risk= 1140  success= 1152  rate=49.7%
-    CCC_2014B          at-risk= 1273  success=  663  rate=65.8%
-    CCC_2014J          at-risk= 1483  success= 1015  rate=59.4%
-    DDD_2013B          at-risk=  793  success=  510  rate=60.9%
-    DDD_2013J          at-risk= 1109  success=  829  rate=57.2%
-    DDD_2014B          at-risk=  749  success=  479  rate=61.0%
-    DDD_2014J          at-risk= 1011  success=  792  rate=56.1%
-    EEE_2013J          at-risk=  443  success=  609  rate=42.1%
-    EEE_2014B          at-risk=  337  success=  357  rate=48.6%
-    EEE_2014J          at-risk=  504  success=  684  rate=42.4%
-    FFF_2013B          at-risk=  832  success=  782  rate=51.5%
-    FFF_2013J          at-risk= 1188  success= 1095  rate=52.0%
-    FFF_2014B          at-risk=  846  success=  654  rate=56.4%
-    FFF_2014J          at-risk= 1248  success= 1117  rate=52.8%
-    GGG_2013J          at-risk=  360  success=  592  rate=37.8%
-    GGG_2014B          at-risk=  355  success=  478  rate=42.6%
-    GGG_2014J          at-risk=  305  success=  444  rate=40.7%
+    AAA_2013J          at-risk=   94  success=  278  rate=25.3%
+    AAA_2014J          at-risk=   97  success=  253  rate=27.7%
+    BBB_2013B          at-risk=  805  success=  803  rate=50.1%
+    BBB_2013J          at-risk=  782  success= 1072  rate=42.2%
+    BBB_2014B          at-risk=  567  success=  727  rate=43.8%
+    BBB_2014J          at-risk=  658  success= 1152  rate=36.4%
+    CCC_2014B          at-risk=  928  success=  663  rate=58.3%
+    CCC_2014J          at-risk= 1069  success= 1015  rate=51.3%
+    DDD_2013B          at-risk=  690  success=  510  rate=57.5%
+    DDD_2013J          at-risk=  850  success=  829  rate=50.6%
+    DDD_2014B          at-risk=  574  success=  479  rate=54.5%
+    DDD_2014J          at-risk=  687  success=  792  rate=46.5%
+    EEE_2013J          at-risk=  325  success=  609  rate=34.8%
+    EEE_2014B          at-risk=  256  success=  357  rate=41.8%
+    EEE_2014J          at-risk=  345  success=  684  rate=33.5%
+    FFF_2013B          at-risk=  739  success=  782  rate=48.6%
+    FFF_2013J          at-risk=  903  success= 1095  rate=45.2%
+    FFF_2014B          at-risk=  659  success=  654  rate=50.2%
+    FFF_2014J          at-risk=  771  success= 1117  rate=40.8%
+    GGG_2013J          at-risk=  334  success=  592  rate=36.1%
+    GGG_2014B          at-risk=  324  success=  478  rate=40.4%
+    GGG_2014J          at-risk=  277  success=  444  rate=38.4%
 
 ── Temporal-cutoff compliance ───────────────────────────────────
   Window (days): 14

@@ -8,6 +8,7 @@ Reads:
 Writes:
   results/graph/lcpo_module_summary.csv
 
+Uses the reference GNN rows only (condition full, weighted loss; see gnn_results.py).
 Groups by (held_out_module, model) and computes mean ± std for AUROC, AUPRC,
 F1, and Balanced_Acc across all folds × seeds within that module.
 Also records n_presentations and n_enrollments_total (sum of n_test).
@@ -32,6 +33,7 @@ _SRC_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SRC_DIR))
 
 from config import GRAPH_RESULTS_DIR
+from gnn_results import select_reference_gnn_rows
 
 _GRAPH_DIR = GRAPH_RESULTS_DIR
 
@@ -142,7 +144,7 @@ def build_module_summary(week: int = 8) -> pd.DataFrame:
               file=sys.stderr)
         sys.exit(1)
 
-    gnn_df = pd.read_csv(_LCPO_RESULTS_PATH)
+    gnn_df = select_reference_gnn_rows(pd.read_csv(_LCPO_RESULTS_PATH))
     gnn_week = gnn_df[gnn_df["week"] == week].copy() if "week" in gnn_df.columns else gnn_df.copy()
 
     if gnn_week.empty:

@@ -60,7 +60,8 @@
       "weeks_active",
       "recency",
       "activity_trend",
-      "max_inactive_gap"
+      "max_inactive_gap",
+      "active_in_window"
     ],
     "contains_assess": [
       "src",
@@ -90,22 +91,22 @@
     }
   },
   "node_counts": {
-    "student": 28785,
+    "student": 25266,
     "course_presentation": 22,
     "assessment": 1,
     "vle_resource": 6364
   },
   "edge_counts": {
-    "enrolled_in": 32593,
+    "enrolled_in": 28119,
     "contains_assess": 1,
     "has_resource": 6364,
-    "submitted": 1089,
-    "interacted_with": 634723
+    "submitted": 1086,
+    "interacted_with": 613000
   },
-  "enrollment_count": 32593,
-  "label_at_risk_count": 17208,
+  "enrollment_count": 28119,
+  "label_at_risk_count": 12734,
   "label_success_count": 15385,
-  "label_at_risk_rate": 0.528,
+  "label_at_risk_rate": 0.4529,
   "artifacts": {
     "nodes_student": "week02_nodes_student.parquet",
     "nodes_course_presentation": "week02_nodes_course_presentation.parquet",
@@ -118,12 +119,12 @@
     "edges_interacted_with": "week02_edges_interacted_with.parquet",
     "enrollments": "week02_enrollments.parquet"
   },
-  "elapsed_seconds": 43.33,
-  "peak_memory_mb": 982.7,
+  "elapsed_seconds": 44.47,
+  "peak_memory_mb": 915.5,
   "max_date_submitted": 14,
   "pre_imputation_nulls": {
     "student": {
-      "imd_band": 971
+      "imd_band": 914
     },
     "vle_resource": {
       "week_from": 5243,

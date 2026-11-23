@@ -1,17 +1,59 @@
 {
   "week": 2,
-  "enrollment_count": 32593,
+  "enrollment_count": 28119,
+  "label_at_risk_count": 12734,
   "random_student_split": {
-    "seed": 42,
+    "seeds": [
+      42,
+      123,
+      7,
+      17,
+      99
+    ],
     "val_frac": 0.1,
     "test_frac": 0.2,
-    "n_train": 22801,
-    "n_val": 3280,
-    "n_test": 6512
+    "files": {
+      "42": "week02_random_split_seed42.parquet",
+      "123": "week02_random_split_seed123.parquet",
+      "7": "week02_random_split_seed7.parquet",
+      "17": "week02_random_split_seed17.parquet",
+      "99": "week02_random_split_seed99.parquet"
+    },
+    "legacy_file": "week02_random_split.parquet (= seed 42)",
+    "per_seed": {
+      "42": {
+        "n_train": 19687,
+        "n_val": 2805,
+        "n_test": 5627
+      },
+      "123": {
+        "n_train": 19691,
+        "n_val": 2826,
+        "n_test": 5602
+      },
+      "7": {
+        "n_train": 19730,
+        "n_val": 2816,
+        "n_test": 5573
+      },
+      "17": {
+        "n_train": 19650,
+        "n_val": 2807,
+        "n_test": 5662
+      },
+      "99": {
+        "n_train": 19700,
+        "n_val": 2787,
+        "n_test": 5632
+      }
+    }
   },
   "lcpo": {
     "n_folds": 22,
-    "folds_file": "week02_lcpo_folds.csv"
+    "folds_file": "week02_lcpo_folds.csv",
+    "masks_file": "week02_lcpo_masks.parquet",
+    "val_sampler": "oulad_data.sample_lcpo_val",
+    "min_val_pos": 20
   },
   "future_presentation": {
     "train_presentations": [
@@ -22,8 +64,8 @@
     "test_presentations": [
       "2014J"
     ],
-    "n_train": 21333,
-    "n_test": 11260
+    "n_train": 18758,
+    "n_test": 9361
   },
-  "note": "Boolean masks reference rows in the enrollment supervision table (week02_enrollments.parquet in GRAPH_ARTIFACTS_DIR). All splits are derived from studentInfo.csv labels \u2014 identical across prediction weeks."
+  "note": "Boolean masks reference rows in the enrollment supervision table (week02_enrollments.parquet in GRAPH_ARTIFACTS_DIR). That table excludes enrollments unregistered on or before the cutoff day, so the population differs by week. Rows are aligned by position and by the (id_student, code_module, code_presentation) key."
 }

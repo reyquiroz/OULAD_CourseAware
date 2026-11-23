@@ -37,6 +37,7 @@ _SRC_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SRC_DIR))
 
 from config import GRAPH_RESULTS_DIR, GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR
+from gnn_results import select_reference_gnn_rows
 from gnn_model import SEED, select_threshold
 
 _GRAPH_DIR = GRAPH_RESULTS_DIR
@@ -620,6 +621,13 @@ def _compute_metrics(
 # 6. main()
 # ---------------------------------------------------------------------------
 
+def _read_reference_gnn(path) -> pd.DataFrame:
+    """Read a GNN LCPO CSV restricted to the reference variant (full, weighted)."""
+    if not path.exists():
+        return pd.DataFrame()
+    return select_reference_gnn_rows(pd.read_csv(path))
+
+
 def _load_gnn_results_from_csv(
     weeks: list[int],
     seeds: list[int],
@@ -640,8 +648,8 @@ def _load_gnn_results_from_csv(
         )
 
     gnn_random_df = pd.read_csv(gnn_random_path)
-    gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
-    gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
+    gnn_lcpo_df = _read_reference_gnn(gnn_lcpo_path)
+    gnn_lcpo_summary = _read_reference_gnn(gnn_lcpo_summary_path)
 
     all_lgbm_random_rows: list[dict] = []
     all_lgbm_fold_dfs: list[pd.DataFrame] = []
@@ -709,8 +717,8 @@ def main(
         gnn_lcpo_summary_path = _GRAPH_DIR / "lcpo_summary.csv"
 
         gnn_random_df = pd.read_csv(gnn_random_path)
-        gnn_lcpo_df = pd.read_csv(gnn_lcpo_path) if gnn_lcpo_path.exists() else pd.DataFrame()
-        gnn_lcpo_summary = pd.read_csv(gnn_lcpo_summary_path) if gnn_lcpo_summary_path.exists() else pd.DataFrame()
+        gnn_lcpo_df = _read_reference_gnn(gnn_lcpo_path)
+        gnn_lcpo_summary = _read_reference_gnn(gnn_lcpo_summary_path)
 
         # Accumulate LightGBM results across all weeks
         all_lgbm_random_rows: list[dict] = []

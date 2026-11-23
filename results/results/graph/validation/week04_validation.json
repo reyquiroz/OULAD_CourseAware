@@ -1,23 +1,23 @@
 {
   "week": 4,
   "runtime": {
-    "elapsed_seconds": 44.22,
-    "peak_memory_mb": 1090.0
+    "elapsed_seconds": 44.91,
+    "peak_memory_mb": 915.5
   },
   "node_counts": {
-    "student": 28785,
+    "student": 24839,
     "course_presentation": 22,
     "assessment": 17,
     "vle_resource": 6364
   },
   "edge_counts": {
-    "enrolled_in": 32593,
+    "enrolled_in": 27538,
     "contains_assess": 17,
     "has_resource": 6364,
-    "submitted": 21393,
-    "interacted_with": 835935
+    "submitted": 20979,
+    "interacted_with": 801741
   },
-  "enrollment_count": 32593,
+  "enrollment_count": 27538,
   "duplicate_nodes": {
     "student": 0,
     "course_presentation": 0,
@@ -98,7 +98,7 @@
   },
   "pre_imputation_nulls": {
     "student": {
-      "imd_band": 971
+      "imd_band": 904
     },
     "vle_resource": {
       "week_from": 5243,
@@ -107,143 +107,143 @@
   },
   "label_distribution": {
     "overall": {
-      "at_risk": 17208,
+      "at_risk": 12153,
       "success": 15385,
-      "total": 32593,
-      "at_risk_rate": 0.528
+      "total": 27538,
+      "at_risk_rate": 0.4413
     },
     "by_course_presentation": {
       "AAA_2013J": {
-        "at_risk": 105,
+        "at_risk": 92,
         "success": 278,
-        "total": 383,
-        "at_risk_rate": 0.2742
+        "total": 370,
+        "at_risk_rate": 0.2486
       },
       "AAA_2014J": {
-        "at_risk": 112,
+        "at_risk": 95,
         "success": 253,
-        "total": 365,
-        "at_risk_rate": 0.3068
+        "total": 348,
+        "at_risk_rate": 0.273
       },
       "BBB_2013B": {
-        "at_risk": 964,
+        "at_risk": 727,
         "success": 803,
-        "total": 1767,
-        "at_risk_rate": 0.5456
+        "total": 1530,
+        "at_risk_rate": 0.4752
       },
       "BBB_2013J": {
-        "at_risk": 1165,
+        "at_risk": 763,
         "success": 1072,
-        "total": 2237,
-        "at_risk_rate": 0.5208
+        "total": 1835,
+        "at_risk_rate": 0.4158
       },
       "BBB_2014B": {
-        "at_risk": 886,
+        "at_risk": 555,
         "success": 727,
-        "total": 1613,
-        "at_risk_rate": 0.5493
+        "total": 1282,
+        "at_risk_rate": 0.4329
       },
       "BBB_2014J": {
-        "at_risk": 1140,
+        "at_risk": 635,
         "success": 1152,
-        "total": 2292,
-        "at_risk_rate": 0.4974
+        "total": 1787,
+        "at_risk_rate": 0.3553
       },
       "CCC_2014B": {
-        "at_risk": 1273,
+        "at_risk": 835,
         "success": 663,
-        "total": 1936,
-        "at_risk_rate": 0.6575
+        "total": 1498,
+        "at_risk_rate": 0.5574
       },
       "CCC_2014J": {
-        "at_risk": 1483,
+        "at_risk": 1006,
         "success": 1015,
-        "total": 2498,
-        "at_risk_rate": 0.5937
+        "total": 2021,
+        "at_risk_rate": 0.4978
       },
       "DDD_2013B": {
-        "at_risk": 793,
+        "at_risk": 636,
         "success": 510,
-        "total": 1303,
-        "at_risk_rate": 0.6086
+        "total": 1146,
+        "at_risk_rate": 0.555
       },
       "DDD_2013J": {
-        "at_risk": 1109,
+        "at_risk": 816,
         "success": 829,
-        "total": 1938,
-        "at_risk_rate": 0.5722
+        "total": 1645,
+        "at_risk_rate": 0.496
       },
       "DDD_2014B": {
-        "at_risk": 749,
+        "at_risk": 551,
         "success": 479,
-        "total": 1228,
-        "at_risk_rate": 0.6099
+        "total": 1030,
+        "at_risk_rate": 0.535
       },
       "DDD_2014J": {
-        "at_risk": 1011,
+        "at_risk": 671,
         "success": 792,
-        "total": 1803,
-        "at_risk_rate": 0.5607
+        "total": 1463,
+        "at_risk_rate": 0.4586
       },
       "EEE_2013J": {
-        "at_risk": 443,
+        "at_risk": 318,
         "success": 609,
-        "total": 1052,
-        "at_risk_rate": 0.4211
+        "total": 927,
+        "at_risk_rate": 0.343
       },
       "EEE_2014B": {
-        "at_risk": 337,
+        "at_risk": 248,
         "success": 357,
-        "total": 694,
-        "at_risk_rate": 0.4856
+        "total": 605,
+        "at_risk_rate": 0.4099
       },
       "EEE_2014J": {
-        "at_risk": 504,
+        "at_risk": 337,
         "success": 684,
-        "total": 1188,
-        "at_risk_rate": 0.4242
+        "total": 1021,
+        "at_risk_rate": 0.3301
       },
       "FFF_2013B": {
-        "at_risk": 832,
+        "at_risk": 668,
         "success": 782,
-        "total": 1614,
-        "at_risk_rate": 0.5155
+        "total": 1450,
+        "at_risk_rate": 0.4607
       },
       "FFF_2013J": {
-        "at_risk": 1188,
+        "at_risk": 887,
         "success": 1095,
-        "total": 2283,
-        "at_risk_rate": 0.5204
+        "total": 1982,
+        "at_risk_rate": 0.4475
       },
       "FFF_2014B": {
-        "at_risk": 846,
+        "at_risk": 648,
         "success": 654,
-        "total": 1500,
-        "at_risk_rate": 0.564
+        "total": 1302,
+        "at_risk_rate": 0.4977
       },
       "FFF_2014J": {
-        "at_risk": 1248,
+        "at_risk": 742,
         "success": 1117,
-        "total": 2365,
-        "at_risk_rate": 0.5277
+        "total": 1859,
+        "at_risk_rate": 0.3991
       },
       "GGG_2013J": {
-        "at_risk": 360,
+        "at_risk": 332,
         "success": 592,
-        "total": 952,
-        "at_risk_rate": 0.3782
+        "total": 924,
+        "at_risk_rate": 0.3593
       },
       "GGG_2014B": {
-        "at_risk": 355,
+        "at_risk": 318,
         "success": 478,
-        "total": 833,
-        "at_risk_rate": 0.4262
+        "total": 796,
+        "at_risk_rate": 0.3995
       },
       "GGG_2014J": {
-        "at_risk": 305,
+        "at_risk": 273,
         "success": 444,
-        "total": 749,
-        "at_risk_rate": 0.4072
+        "total": 717,
+        "at_risk_rate": 0.3808
       }
     }
   },

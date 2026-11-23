@@ -1,4 +1,5 @@
-# NOTE: Prediction unit is the enrolled_in edge (one per enrollment, 32,593 total)
+# NOTE: Prediction unit is the enrolled_in edge (one per enrollment; the count differs by week
+# because enrollments unregistered on or before the cutoff day are excluded)
 # Each enrolled_in edge connects a student node to a course_presentation node and
 # carries one binary label (target: 1 = at-risk, 0 = success). The GNN predicts
 # at-risk probability per edge rather than per student, so students with multiple
@@ -665,41 +666,34 @@ def load_split_masks(
     week: int,
     split_type: str = "random",
     eval_dir: str = EVAL_DIR,
+    seed: int = SEED,
+    fold_idx: int = 0,
 ):
-    """Return (train_mask, val_mask, test_mask) boolean tensors over 32,593 enrollments.
+    """Return (train_mask, val_mask, test_mask) boolean tensors over the week's enrollments.
+
+    Thin tensor wrapper over ``split_loader``, the single read path for the persisted
+    splits written by ``save_graph_splits.py``.
 
     Parameters
     ----------
     week:       int — prediction week (2, 4, 6, 8)
     split_type: "random" or "lcpo"
     eval_dir:   base directory for evaluation split files
+    seed:       random-student split seed (split_type="random")
+    fold_idx:   LCPO fold index (split_type="lcpo")
 
-    The random split parquet has columns is_train / is_val / is_test (bool).
-    Row order matches week{N}_enrollments.parquet (both derived from studentInfo.csv).
+    Row order matches week{N}_enrollments.parquet.
     """
-    w = f"week{week:02d}"
-    split_dir = os.path.join(eval_dir, w, "splits")
+    from split_loader import load_lcpo_masks, load_random_split
 
+    frame = pd.read_parquet(os.path.join(ARTIFACT_DIR, f"week{week:02d}_enrollments.parquet"))
     if split_type == "random":
-        path = os.path.join(split_dir, f"{w}_random_split.parquet")
-        sp = pd.read_parquet(path)
-        train_mask = torch.tensor(sp["is_train"].values, dtype=torch.bool)
-        val_mask = torch.tensor(sp["is_val"].values, dtype=torch.bool)
-        test_mask = torch.tensor(sp["is_test"].values, dtype=torch.bool)
+        masks = load_random_split(week, seed, frame=frame, eval_dir=eval_dir)
     elif split_type == "lcpo":
-        path = os.path.join(split_dir, f"{w}_lcpo_folds.csv")
-        sp = pd.read_csv(path)
-        # LCPO CSV has a 'fold' column; use fold 0 as test, rest as train, no val
-        if "fold" not in sp.columns:
-            raise ValueError(f"LCPO file {path} has no 'fold' column")
-        test_fold = sp["fold"].min()
-        test_mask = torch.tensor((sp["fold"] == test_fold).values, dtype=torch.bool)
-        val_mask = torch.zeros(len(sp), dtype=torch.bool)
-        train_mask = ~test_mask
+        masks = load_lcpo_masks(week, fold_idx, frame=frame, eval_dir=eval_dir)
     else:
         raise ValueError(f"Unknown split_type '{split_type}'. Use 'random' or 'lcpo'.")
-
-    return train_mask, val_mask, test_mask
+    return tuple(torch.tensor(m.to_numpy(), dtype=torch.bool) for m in masks)
 
 
 # ---------------------------------------------------------------------------
@@ -1317,7 +1311,8 @@ if __name__ == "__main__":
     with torch.no_grad():
         logits = model(data)
     probs = torch.sigmoid(logits)
-    print(f"  logits shape: {logits.shape}  (expected: torch.Size([32593]))")
+    n_enrolled_in = data[("student", "enrolled_in", "course_presentation")].edge_index.shape[1]
+    print(f"  logits shape: {logits.shape}  (expected: torch.Size([{n_enrolled_in}]))")
     print(f"  probs range:  [{probs.min():.4f}, {probs.max():.4f}]")
 
     print("\nRunning one training step...")
@@ -1339,5 +1334,5 @@ if __name__ == "__main__":
     test_metrics = evaluate(model, data, test_mask, label="test")
 
     print("\nSmoke test complete.")
-    assert logits.shape == torch.Size([32593]), f"Unexpected logits shape: {logits.shape}"
-    print("[OK] logits shape is correct (32,593 enrollments)")
+    assert logits.shape == torch.Size([n_enrolled_in]), f"Unexpected logits shape: {logits.shape}"
+    print(f"[OK] logits shape is correct ({n_enrolled_in:,} enrollments)")

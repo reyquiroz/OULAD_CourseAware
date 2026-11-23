@@ -1,0 +1,29 @@
+{
+  "week": 4,
+  "enrollment_count": 32593,
+  "random_student_split": {
+    "seed": 42,
+    "val_frac": 0.1,
+    "test_frac": 0.2,
+    "n_train": 22801,
+    "n_val": 3280,
+    "n_test": 6512
+  },
+  "lcpo": {
+    "n_folds": 22,
+    "folds_file": "week04_lcpo_folds.csv"
+  },
+  "future_presentation": {
+    "train_presentations": [
+      "2013B",
+      "2013J",
+      "2014B"
+    ],
+    "test_presentations": [
+      "2014J"
+    ],
+    "n_train": 21333,
+    "n_test": 11260
+  },
+  "note": "Boolean masks reference rows in the enrollment supervision table (week04_enrollments.parquet in GRAPH_ARTIFACTS_DIR). All splits are derived from studentInfo.csv labels \u2014 identical across prediction weeks."
+}

@@ -12,15 +12,15 @@ for week in 2 4 6 8; do
 done
 
 echo "=== 2. Split generation ==="
-python src/save_graph_splits.py --weeks 2 4 6 8
+python src/save_graph_splits.py
 
 echo "=== Preflight: checking graph artifacts ==="
-REQUIRED_ARTIFACT="results/graph/artifacts/week08_enrollments.parquet"
+REQUIRED_ARTIFACT="results/results/graph/artifacts/week08_enrollments.parquet"
 if [ ! -f "$REQUIRED_ARTIFACT" ]; then
     echo "ERROR: Required graph artifact not found: $REQUIRED_ARTIFACT"
     echo "Run the graph pipeline first:"
     echo "  for week in 2 4 6 8; do python src/run_graph_pipeline.py --week \$week; done"
-    echo "  python src/save_graph_splits.py --weeks 2 4 6 8"
+    echo "  python src/save_graph_splits.py"
     exit 1
 fi
 echo "  OK: artifacts found"

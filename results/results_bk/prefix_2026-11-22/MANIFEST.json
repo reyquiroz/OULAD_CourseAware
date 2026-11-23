@@ -1,0 +1,74 @@
+{
+ "graph/ablation_results.csv": {
+  "rows": 35,
+  "sha256": "f1d46f6d4be331c0"
+ },
+ "graph/ablation_results_v1_buggy.csv": {
+  "rows": 6,
+  "sha256": "8bbb9e9ea073593f"
+ },
+ "graph/comparison_results.csv": {
+  "rows": 147,
+  "sha256": "57386a625f4f9d73"
+ },
+ "graph/comparison_results_v1_buggy.csv": {
+  "rows": 37,
+  "sha256": "24173086ac72a3dc"
+ },
+ "graph/comparison_results_vle_only.csv": {
+  "rows": 147,
+  "sha256": "57386a625f4f9d73"
+ },
+ "graph/course_diagnostics.csv": {
+  "rows": 22,
+  "sha256": "2e3d80e35c6c7a19"
+ },
+ "graph/course_variation.csv": {
+  "rows": 22,
+  "sha256": "2d0cd3bde47bb0a6"
+ },
+ "graph/lcpo_module_summary.csv": {
+  "rows": 14,
+  "sha256": "39bf8fce078fe8c6"
+ },
+ "graph/lcpo_results.csv": {
+  "rows": 110,
+  "sha256": "87c8ca7fc1f29983"
+ },
+ "graph/lcpo_results_old_single_seed.csv": {
+  "rows": 22,
+  "sha256": "034630f08c0a97f7"
+ },
+ "graph/lcpo_results_v1_buggy.csv": {
+  "rows": 10,
+  "sha256": "61228cda7707298c"
+ },
+ "graph/lcpo_summary.csv": {
+  "rows": 22,
+  "sha256": "9d99362acc8bf464"
+ },
+ "graph/lcpo_summary_old_single_seed.csv": {
+  "rows": 6,
+  "sha256": "04f9b65447298465"
+ },
+ "graph/lcpo_summary_v1_buggy.csv": {
+  "rows": 2,
+  "sha256": "5568ccc73b2dd615"
+ },
+ "graph/random_student_results.csv": {
+  "rows": 8,
+  "sha256": "f6b31d8ceffc4287"
+ },
+ "graph/random_student_results_v1_buggy.csv": {
+  "rows": 24,
+  "sha256": "474c47ad6ce2cc41"
+ },
+ "matched/lgbm_matched_results.csv": {
+  "rows": 108,
+  "sha256": "03cf28a058668cbe"
+ },
+ "matched/mlp_matched_results.csv": {
+  "rows": 108,
+  "sha256": "91c7bae26363b14d"
+ }
+}

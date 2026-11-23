@@ -416,3 +416,62 @@ def lcpo_split(enrollments_df, held_out_module, held_out_presentation):
         )
 
     return train_mask, test_mask
+
+
+def sample_lcpo_val(enroll_df, train_all_mask, y, fold_idx, min_val_pos=20):
+    """Sample val students from train set; fallback if not enough positives.
+
+    Parameters
+    ----------
+    enroll_df : pd.DataFrame
+        Enrollment DataFrame.
+    train_all_mask : np.ndarray
+        Boolean array indicating non-test enrollments.
+    y : np.ndarray
+        Target labels aligned with enroll_df.
+    fold_idx : int
+        Current fold index.
+    min_val_pos : int
+        Minimum number of positives required in validation set.
+
+    Returns
+    -------
+    train_mask_np : np.ndarray
+        Boolean array for training enrollments.
+    val_mask_np : np.ndarray
+        Boolean array for validation enrollments.
+    """
+    n_enrollments = len(enroll_df)
+    train_student_ids = enroll_df.loc[train_all_mask, "id_student"].unique()
+    rng = np.random.default_rng(fold_idx)
+    val_size = max(1, int(0.10 * len(train_student_ids)))
+    val_student_ids = rng.choice(train_student_ids, size=val_size, replace=False)
+
+    val_mask_np = train_all_mask & enroll_df["id_student"].isin(val_student_ids).to_numpy()
+    train_mask_np = train_all_mask & ~val_mask_np
+
+    y_np = np.asarray(y).astype(np.int32)
+    val_pos_count = int(y_np[val_mask_np].sum())
+
+    if val_pos_count < min_val_pos:
+        train_indices = np.where(train_all_mask)[0]
+        for frac in [0.10, 0.15, 0.20, 0.25, 0.30]:
+            n_val = max(1, int(frac * len(train_indices)))
+            candidate_val = rng.choice(train_indices, size=n_val, replace=False)
+            candidate_mask = np.zeros(n_enrollments, dtype=bool)
+            candidate_mask[candidate_val] = True
+            if y_np[candidate_mask].sum() >= min_val_pos:
+                val_mask_np = candidate_mask
+                train_mask_np = train_all_mask & ~candidate_mask
+                val_pos_count = int(y_np[val_mask_np].sum())
+                print(f"[fallback val] frac={frac:.2f}  val_pos={val_pos_count}", end="  ", flush=True)
+                break
+        else:
+            val_mask_np = candidate_mask
+            train_mask_np = train_all_mask & ~candidate_mask
+            val_pos_count = int(y_np[val_mask_np].sum())
+            print(f"[fallback val 30% best-effort] val_pos={val_pos_count}", end="  ", flush=True)
+    else:
+        print(f"[val_pos={val_pos_count}]", end="  ", flush=True)
+
+    return train_mask_np, val_mask_np

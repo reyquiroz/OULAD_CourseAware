@@ -66,6 +66,10 @@ STUDENT_REGISTRATION_FILE = DATA_DIR / "studentRegistration.csv"
 # Random state for reproducibility
 RANDOM_STATE = 42
 
+# Tag written into every result row. Rows from before the 2026-10-16 review fixes carry
+# "v2_corrected" (or no tag); they are archived under results/results_bk/ and never mixed in.
+PIPELINE_VERSION = "v3_post_oct16_fixes"
+
 # Model hyperparameters
 MODEL_PARAMS = {
     "random_state": RANDOM_STATE,

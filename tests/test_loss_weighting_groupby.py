@@ -7,9 +7,9 @@ Unit tests verifying that:
    2 loss settings: weighted and unweighted) produces exactly 2 summary
    rows when grouped by loss_weighting — one per setting, not one pooled row.
 
-2. The MLP run_mlp_matched() function emits model="MLP_behavioral_summaries"
-   when feature_set="A" (six behavioral summaries only) so that
-   update_results_matrix routes it to the correct spreadsheet row.
+2. The MLP label mapping (run_matched_comparison._MLP_MODEL_NAMES) gives every feature
+   set its own model label: A -> MLP_all_features, S -> MLP_six_summaries (six behavioral
+   summaries only), B-E -> MLP_feature_set_X, so no two sets share a matrix row.
 
 Run from the project root:
     source oulad_env/bin/activate
@@ -129,25 +129,25 @@ class TestLossWeightingGroupby:
 
 
 # ---------------------------------------------------------------------------
-# Tests — six_summaries MLP model name
+# Tests — MLP model label per feature set (calls the real mapping, not a copy)
 # ---------------------------------------------------------------------------
 
-class TestSixSummariesModelName:
-    """run_mlp_matched() must use model='MLP_behavioral_summaries' for feature_set='A'."""
+class TestMlpModelNames:
+    """Each feature set must have its own, unambiguous MLP model label."""
 
-    def test_feature_set_a_maps_to_behavioral_summaries(self):
-        """The model name derived from feature_set='A' must be 'MLP_behavioral_summaries'."""
-        feature_set = "A"
-        mlp_model_name = "MLP_behavioral_summaries" if feature_set == "A" else "MLP_all_features"
-        assert mlp_model_name == "MLP_behavioral_summaries", (
-            "feature_set='A' must produce model='MLP_behavioral_summaries' so "
-            "update_results_matrix routes it to row 17 (not row 16)."
-        )
+    def test_a_is_all_features_and_s_is_six_summaries(self):
+        from run_matched_comparison import _MLP_MODEL_NAMES
 
-    def test_other_feature_sets_map_to_all_features(self):
-        """Any feature_set other than 'A' must produce model='MLP_all_features'."""
-        for fs in ("B", "C", "D", "E"):
-            mlp_model_name = "MLP_behavioral_summaries" if fs == "A" else "MLP_all_features"
-            assert mlp_model_name == "MLP_all_features", (
-                f"feature_set={fs!r} must produce model='MLP_all_features', got {mlp_model_name!r}."
-            )
+        assert _MLP_MODEL_NAMES["A"] == "MLP_all_features"
+        assert _MLP_MODEL_NAMES["S"] == "MLP_six_summaries"
+
+    def test_labels_are_unique_and_cover_every_feature_set(self):
+        from run_matched_comparison import _FEATURE_SET_FLAGS, _MLP_MODEL_NAMES
+
+        assert set(_MLP_MODEL_NAMES) == set(_FEATURE_SET_FLAGS)
+        assert len(set(_MLP_MODEL_NAMES.values())) == len(_MLP_MODEL_NAMES)
+
+    def test_old_misleading_label_is_gone(self):
+        from run_matched_comparison import _MLP_MODEL_NAMES
+
+        assert "MLP_behavioral_summaries" not in _MLP_MODEL_NAMES.values()

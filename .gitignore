@@ -36,12 +36,9 @@ data/*Report*.csv
 data/raw/*Completion*.csv
 data/raw/*Report*.csv
 
-# ── Graph pipeline — large binary artifacts ───────────────────────────────
+# ── Graph pipeline artifacts ──────────────────────────────────────────────
+# Results, including graph artifacts under results/, are tracked on purpose.
 # Regenerate with: python src/run_graph_pipeline.py --week 8
-results/graph/artifacts/*.parquet
-results/graph/artifacts/*.csv
-# Exception: keep the small metadata JSON (schema + counts, ~4 KB)
-!results/graph/artifacts/*_metadata.json
 
 # ── Result files that live in the wrong place ─────────────────────────────
 src/*.csv
@@ -94,3 +91,9 @@ reynaldo-quiroz-feedback-requirements-traceability.html
 feedback-resolution-traceability.html
 docs/progress_report.html
 data/Zenodo/
+
+# Local stage runner logs and pid files
+logs/
+
+# Personal documents (CVs, cover letters)
+cv/

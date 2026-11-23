@@ -10,7 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from run_gnn_experiment import _sample_lcpo_val
+from oulad_data import sample_lcpo_val
 
 
 def test_fallback_triggers_when_val_positives_below_threshold():
@@ -34,8 +34,8 @@ def test_fallback_triggers_when_val_positives_below_threshold():
     train_all_mask = np.ones(n_rows, dtype=bool)
     y = enroll_df["target"].to_numpy()
 
-    # Call _sample_lcpo_val with fold_idx=0
-    train_mask, val_mask = _sample_lcpo_val(
+    # Call sample_lcpo_val with fold_idx=0
+    train_mask, val_mask = sample_lcpo_val(
         enroll_df=enroll_df,
         train_all_mask=train_all_mask,
         y=y,
@@ -70,7 +70,7 @@ def test_val_and_train_students_are_disjoint_after_fallback():
     y = enroll_df["target"].to_numpy()
 
     # Trigger sampling with fold_idx=1
-    train_mask, val_mask = _sample_lcpo_val(
+    train_mask, val_mask = sample_lcpo_val(
         enroll_df=enroll_df,
         train_all_mask=train_all_mask,
         y=y,

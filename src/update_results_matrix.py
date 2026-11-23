@@ -75,7 +75,7 @@ MODEL_TO_ROW = {
     # Matched comparison rows
     "LightGBM_matched":                        12,
     "MLP_all_features":                        16,
-    "MLP_behavioral_summaries":                17,
+    "MLP_six_summaries":                       17,
     # GraphSAGE variants
     "GraphSAGE_base_weighted":                 18,
     "GraphSAGE_base_unweighted":               19,
@@ -218,7 +218,7 @@ def build_update_plan(sources: dict) -> list[dict]:
                 sub_beh = mlp[
                     (mlp["week"] == week)
                     & (mlp["split_type"] == "random")
-                    & (mlp["model"] == "MLP_behavioral_summaries")
+                    & (mlp["model"] == "MLP_six_summaries")
                 ]
                 _add(sheet, 17, col, _summarise(sub_beh, metric))
             for week, col in _LCPO_WEEK_TO_COL.items():
@@ -231,7 +231,7 @@ def build_update_plan(sources: dict) -> list[dict]:
                 sub_beh = mlp[
                     (mlp["week"] == week)
                     & (mlp["split_type"] == "lcpo")
-                    & (mlp["model"] == "MLP_behavioral_summaries")
+                    & (mlp["model"] == "MLP_six_summaries")
                 ]
                 _add(sheet, 17, col, _summarise(sub_beh, metric))
 

@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from config import GRAPH_RESULTS_DIR, GRAPH_ARTIFACTS_DIR, GRAPH_EVALUATION_DIR
+from gnn_results import select_reference_gnn_rows
 
 ARTIFACTS_DIR = GRAPH_ARTIFACTS_DIR
 GRAPH_DIR = GRAPH_RESULTS_DIR
@@ -174,7 +175,7 @@ def _build_gnn_auroc(week: int) -> pd.DataFrame:
             ]
         )
 
-    results = pd.read_csv(lcpo_path)
+    results = select_reference_gnn_rows(pd.read_csv(lcpo_path))
     results = results[results["week"] == week]
     if results.empty:
         return pd.DataFrame(
